@@ -5,10 +5,18 @@ import time
 import configuration as c
 import threading
 import os
+import datetime  # Add this import at the top if not present
+import json
 
 # Import Termux:GUI to diplay overlay if script is running on Android
 if c.RUN_ON_MOBILE:
     import termuxgui as tg
+
+# Load tap info
+with open("tap_info.json", "r") as f:
+    tap_info = json.load(f)
+
+last_collected = None  # or last_collected = ""
 
 # A function that generates a button with specified text, layout, and optional width.
 def create_overlay_button(activity, text, layout, width=40):
@@ -30,34 +38,47 @@ def display_overlay_on_android(height, connection):
     
     rootLinear = tg.LinearLayout(activity, vertical=False)
     
-    play_pause_btn = create_overlay_button(activity, "⏯️", rootLinear) 
-    farm_btn = create_overlay_button(activity, "🧑‍🌾", rootLinear) 
+    play_pause_btn = create_overlay_button(activity, "⏸️ Pause", rootLinear) 
     exit_btn = create_overlay_button(activity, "❌", rootLinear) 
     
     time.sleep(1)
             
-    return play_pause_btn, farm_btn, exit_btn
+    return play_pause_btn, exit_btn
 
 # Set flags for next action when button press
-pause_flag, farm_flag, exit_flag = [False] * 3
-def action_on_overlay_button_press(connection, play_pause_id, farm_id, exit_id):
-    global pause_flag, farm_flag, exit_flag
+pause_flag, exit_flag = [False] * 2
+def action_on_overlay_button_press(connection, play_pause_btn, exit_btn):
+    global pause_flag, exit_flag
     for event in connection.events():
-        if event and event.type == tg.Event.click and event.value["id"] == play_pause_id:
+        if event and event.type == tg.Event.click and event.value["id"] == play_pause_btn.id:
             pause_flag = not pause_flag
             if pause_flag:
+                play_pause_btn.settext("▶️ Continue")
                 connection.toast("Bot is pausing")
             else:
+                play_pause_btn.settext("⏸️ Pause")
                 connection.toast("Bot starting")
-        if event and event.type == tg.Event.click and event.value["id"] == farm_id:
-            farm_flag = True and pause_flag
-            if farm_flag:
-                connection.toast("Starting energy farm")
-            else:
-                connection.toast("Please pause before farm")
-        if event and event.type == tg.Event.click and event.value["id"] == exit_id:
+        if event and event.type == tg.Event.click and event.value["id"] == exit_btn.id:
             exit_flag = True
             connection.toast("Closing bot")
+
+# Check the state of the button flags
+def do_button_flags(img, device):
+    global pause_flag, exit_flag
+    print(f"[DEBUG] Checking flags: pause_flag={pause_flag}, exit_flag={exit_flag}")
+    if not check_app_in_foreground(device, c.TARGET_APP_PKG):
+        print("[ERROR] Rise of Berk app is not running anymore")
+        exit()
+    while pause_flag:
+        print("[INFO] Bot is paused. Waiting for resume or exit...")
+        time.sleep(0.5)
+        print(f"[DEBUG] Inside pause loop: pause_flag={pause_flag}, exit_flag={exit_flag}")
+        if exit_flag:
+            print("[INFO] Exit flag detected during pause. Exiting bot.")
+            exit()
+    if exit_flag:
+        print("[INFO] Exit flag detected. Exiting bot.")
+        exit()  
 
 # Get and image from ADB and transform it to opencv image
 def get_screen_capture(device):
@@ -73,18 +94,275 @@ def check_app_in_foreground(device, target):
 
     return False
 
-# Waits for the Aliexpress app to be opened on the device.
-def wait_for_Rise_app(device):
+def debugger(device, last_activity_name=None):
+    if locate_and_press(device, "X.png", "Close popup"):
+        print("X button found and clicked.")
+        return True
+    if check_color_and_tap(device, "Reconnect"):
+        print("Reconnect button found and clicked.")
+        return True
+    if last_activity_name:
+        print(f"Trying last activity: {last_activity_name}")
+        if last_activity_name.endswith(".png"):
+            if locate_and_press(device, last_activity_name, f"Try {last_activity_name}"):
+                print(f"{last_activity_name} found and pressed.")
+                return True
+        else:
+            if check_color_and_tap(device, last_activity_name):
+                print(f"{last_activity_name} found and pressed.")
+                return True
+    fatal_error("Unidentified problem", get_screen_capture(device), device)
+    return False
+            
+def fatal_error(msg, img, device=None):
+    # Create error folder if it doesn't exist
+    error_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "error")
+    os.makedirs(error_dir, exist_ok=True)
+    # Generate filename with current time
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"error_{timestamp}.png"
+    filepath = os.path.join(error_dir, filename)
+    # Save image
+    cv2.imwrite(filepath, img)
+    print(f"Error screen saved to {filepath}")
+    print(msg)
+    # Terminate Rise of Berk app if device is not None
+    if device is not None:
+        device.shell(f"am force-stop {c.TARGET_APP_PKG}")
+    # Do not exit, just return to continue Python code
+    return
+
+def Start_Rise_app(device):
     if check_app_in_foreground(device, c.TARGET_APP_PKG):
         print("Rise of Berk app is running")
         return True
     else:
-        print("Please open Rise of Berk. Waiting 15 seconds.")
+        print("Please open Rise of Berk. Waiting 25 seconds.")
+        print("Attempting to start Rise of Berk app")
+        device.shell(f"monkey -p {c.TARGET_APP_PKG} -c android.intent.category.LAUNCHER 1")
         time.sleep(15)
         if not check_app_in_foreground(device, c.TARGET_APP_PKG):
-            print("Rise of Berk is not in focus. Exiting script")
-            exit()
-            
+            fatal_error("Failed to start Rise of Berk app. Exiting script.", get_screen_capture(device))
+            return False 
+        return True
+
+def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_instead_of_press=False, timeout=2.0, last_activity_name=None):
+    do_button_flags(device)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    icons_dir = os.path.join(script_dir, "icons")
+    template_path = os.path.join(icons_dir, template_name)
+    template = cv2.imread(template_path, cv2.IMREAD_UNCHANGED)
+
+    if template is None:
+        print(f"Template image {template_name} not found in icons folder.")
+        return False
+
+    # Handle alpha channel (for transparent background templates)
+    if template.shape[2] == 4:
+        alpha_channel = template[:, :, 3]
+        mask = cv2.threshold(alpha_channel, 1, 255, cv2.THRESH_BINARY)[1]
+        template = cv2.cvtColor(template, cv2.COLOR_BGRA2BGR)
+    else:
+        mask = None
+
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        img = get_screen_capture(device)
+        gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+
+        result = cv2.matchTemplate(gray_img, gray_template, cv2.TM_CCOEFF_NORMED, mask=mask)
+        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+
+        if max_val >= threshold:
+            h, w = template.shape[:2]
+            top_left = max_loc
+            center_x = top_left[0] + w // 2
+            center_y = top_left[1] + h // 2
+
+            # Remove .png extension for tap_info key
+            key_name = template_name.replace('.png', '')
+
+            # To save/update a location:
+            patch = img[center_y-10:center_y+10+1, center_x-10:center_x+10+1]
+            color_code = patch.mean(axis=(0,1))
+            tap_info[key_name] = [center_x, center_y, color_code.tolist()]
+            with open("tap_info.json", "w") as f:
+                json.dump(tap_info, f, indent=2)
+            if not verify_instead_of_press:
+                device.input_tap(center_x, center_y)
+                print(f"{action_desc} - Pressed at ({center_x}, {center_y}) with confidence {max_val:.2f}")
+            return True
+        do_button_flags(device)
+        time.sleep(0.1)
+    print(f"{action_desc} - Not found after {timeout} seconds.")
+    # Try reconnect and last activity
+    debugger(device, last_activity_name)
+    return False
+
+def swipe_up(device, img, duration_ms=500):
+    """
+    Swipe from bottom to top at the horizontal center of the screen.
+    duration_ms: swipe duration in milliseconds
+    """
+    height, width = img.shape[:2]
+    x = width // 2
+    y_start = int(height * 0.85)  # Start near bottom
+    y_end = int(height * 0.3)    # End near top
+    device.shell(f"input swipe {x} {y_start} {x} {y_end} {duration_ms}")
+    print(f"Swiped from ({x}, {y_start}) to ({x}, {y_end})")
+    time.sleep(0.1)  # Wait for swipe action to complete
+    
+def Initiate_bot_resend_sequence(device):
+    print("Initiating bot sequence")
+    img = get_screen_capture(device)
+    
+    locate_and_press(device, "X.png", "Close any Limited Offers", timeout=15)
+    locate_and_press(device, "Head_toothless_left_up.png", "Locate and press Head toothless left up", timeout=2)
+    locate_and_press(device, "Night_Fury.png", "Verify that Night Fury is selected", verify_instead_of_press=True, timeout=2)
+    locate_and_press(device, "Search_button.png", "Locate and press Search button", timeout=2)
+    swipe_up(device, img)
+    if not locate_and_press(device, "Terrible_Terror_Search_Selection.png", "Locate and press Terrible terror in the list"):
+        swipe_up(device, img)
+        if not locate_and_press(device, "Terrible_Terror_Search_Selection.png", "Locate and press Terrible terror in the list"):
+            swipe_up(device, img)
+            locate_and_press(device, "Terrible_Terror_Search_Selection.png", "Locate and press Terrible terror in the list")
+    locate_and_press(device, "1_bag_search.png", "select 1 bag search option")
+    locate_and_press(device, "Start_Explore.png", "Locate and press Start Explore button")
+    locate_and_press(device, "Speed_up.png", "Speed up the exploration free")
+
+    with open("tap_info.json", "w") as f:
+        json.dump(tap_info, f, indent=2)  
+    device.input_tap(screen_center_x, screen_center_y)
+    locate_and_press(device, "Bag.png", "Open Bag")
+    if not locate_and_press(device, "Collect.png", "Collect toothless rewards"):
+        locate_and_press(device, "No_thanks.png", "Close Buy egg popup")
+    if locate_and_press(device, "Release.png", "Release egg"):
+        locate_and_press(device, "Yes.png", "Confirm Release egg")
+        locate_and_press(device, "Yes_2.png", "Close really popup")
+    if locate_and_press(device, "Head_toothless_left_up.png", "Locate Head toothless left up", verify_instead_of_press=True):
+        device.input_tap(screen_center_x, screen_center_y)
+        while not locate_and_press(device, "Resend.png", "Resend toothless button exists", verify_instead_of_press=True, timeout=0.5):
+            device.input_tap(screen_center_x, screen_center_y)
+            time.sleep(0.3)  # Adjust delay as needed
+        return True
+
+def check_color_and_tap(device, tap_target, tolerance=4, patch_size=10, timeout=2.0, tap_count=2, last_activity_name=None):
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        img = get_screen_capture(device)
+        if tap_target not in tap_info:
+            print(f"[ERROR] No saved location for {tap_target} button in tap_info.")
+            continue
+        center_x, center_y, saved_color = tap_info[tap_target]
+        saved_color = np.array(saved_color)
+        patch = img[center_y-patch_size:center_y+patch_size+1, center_x-patch_size:center_x+patch_size+1]
+        mean_color = patch.mean(axis=(0,1))
+        dist = np.linalg.norm(mean_color - saved_color)
+        print(f"[DEBUG] {tap_target} button color distance: {dist:.2f}")
+        if dist < tolerance:
+            print(f"[INFO] {tap_target} button detected by color match.")
+            for _ in range(tap_count):
+                device.input_tap(center_x, center_y)
+                time.sleep(0.3)
+            return True
+        time.sleep(0.1)
+    print(f"[INFO] {tap_target} button not detected within {timeout} seconds.")
+    # Try reconnect and last activity
+    debugger(device, last_activity_name)
+    do_button_flags(device)
+    return False
+
+# Example reference colors (BGR)
+COLLECT_TYPES = {
+    "egg": np.array([ 63.91156463, 173.5260771 , 125.96371882]),
+    "fish": np.array([150.46485261, 123.73696145,  66.27210884]),
+    "wood": np.array([ 87.94557823, 114.2585034 , 160.27437642]),
+    "rune": np.array([104.42176871, 136.29478458,  34.46258503])
+}
+
+def classify_bag_patch(mean_color, tolerance=10):
+    for name, ref_color in COLLECT_TYPES.items():
+        if np.linalg.norm(mean_color - ref_color) < tolerance:
+            return name
+    return "unknown"
+
+def collect_and_classify_bag(device, tolerance=4, patch_size=10, timeout=2.0, tap_count=2):
+    global last_collected
+    found = False
+    start_time = time.time()
+    targets = ["Collect", "No_thanks"]
+    while time.time() - start_time < timeout:
+        img = get_screen_capture(device)
+        for target in targets:
+            if target not in tap_info:
+                print(f"[ERROR] No saved location for {target} button in tap_info.")
+                continue
+            center_x, center_y, saved_color = tap_info[target]
+            saved_color = np.array(saved_color)
+            patch = img[center_y-patch_size:center_y+patch_size+1, center_x-patch_size:center_x+patch_size+1]
+            mean_color = patch.mean(axis=(0,1))
+            dist = np.linalg.norm(mean_color - saved_color)
+            print(f"[DEBUG] {target} button color distance: {dist:.2f}")
+            if dist < tolerance:
+                print(f"[INFO] {target} button detected by color match.")
+                for _ in range(tap_count):
+                    device.input_tap(center_x, center_y)
+                    time.sleep(0.3)
+                found = True
+        if found:
+            break
+        time.sleep(0.1)
+    if not found:
+        print(f"[INFO] Collect/No_thanks buttons not detected within {timeout} seconds.")
+        do_button_flags(device)
+        debugger(device)
+    # Classify bag patch
+    img = get_screen_capture(device)
+    if "Bag" in tap_info:
+        bag_x, bag_y, _ = tap_info["Bag"]
+        bag_patch = img[bag_y-patch_size:bag_y+patch_size+1, bag_x-patch_size:bag_x+patch_size+1]
+        bag_mean = bag_patch.mean(axis=(0,1))
+        collected_type = classify_bag_patch(bag_mean)
+        last_collected = collected_type
+        print(f"[INFO] Detected collected type: {last_collected}")
+    else:
+        print("[WARN] Bag coordinates not found in tap_info.")
+    if last_collected == "egg":
+        check_color_and_tap(device, "Release", tolerance, patch_size, timeout, tap_count)
+        check_color_and_tap(device, "Yes", tolerance, patch_size, timeout, tap_count)
+        check_color_and_tap(device, "Yes_2", tolerance, patch_size, timeout, tap_count)
+        locate_and_press(device, "Head_toothless_left_up.png", "Successfully finished resend", verify_instead_of_press=True)
+        wait_for_patch_match(device, "Resend", tolerance, patch_size, timeout=2.0)
+
+def wait_for_patch_match(device, target_name, tolerance=4, patch_size=10, timeout=1.5):
+    """Tap center until the patch at target_name matches its saved color."""
+    start_time = time.time()
+    if target_name not in tap_info:
+        print(f"[ERROR] No saved location for {target_name} in tap_info.")
+        return False
+    center_x = screen_center_x
+    center_y = screen_center_y
+    target_x, target_y, saved_color = tap_info[target_name]
+    saved_color = np.array(saved_color)
+    while time.time() - start_time < timeout:
+        img = get_screen_capture(device)
+        patch = img[target_y-patch_size:target_y+patch_size+1, target_x-patch_size:target_x+patch_size+1]
+        mean_color = patch.mean(axis=(0,1))
+        dist = np.linalg.norm(mean_color - saved_color)
+        print(f"[DEBUG] {target_name} patch color distance: {dist:.2f}")
+        if dist < tolerance:
+            print(f"[INFO] {target_name} patch matched by color.")
+            return True
+        device.input_tap(center_x, center_y)
+        time.sleep(0.3)
+    print(f"[INFO] {target_name} patch not matched within {timeout} seconds.")
+    return False
+
+screen_height = None
+screen_width = None
+screen_center_x = None
+screen_center_y = None
 
 def main():
     print("Make sure you are connected to the ADB, check `adb devices`!\n")
@@ -113,70 +391,33 @@ def main():
     print("Checking if the Rise of Berk app is running")
 
     # Check if Rise of Berk app is running
-    wait_for_Rise_app(device)
+    Start_Rise_app(device)
 
-    img = get_screen_capture(device)
 
-    # Only try to merge objects with a similarity above this threshold
-    height, width, _ = img.shape
-    
+    screen_height, screen_width, _ = get_screen_capture(device).shape
+    screen_center_x = screen_width // 2
+    screen_center_y = screen_height // 2
     # Display control overlay on mobile and create an thread to verify input
     if c.RUN_ON_MOBILE:
-        play_pause_id, farm_id, exit_id = display_overlay_on_android(height, connection)
+        play_pause_btn, exit_btn = display_overlay_on_android(screen_height, connection)
         watcher = threading.Thread(
-                            target=action_on_overlay_button_press, 
-                            args=(connection, play_pause_id, farm_id, exit_id), 
-                            daemon=True
-                  )
+            target=action_on_overlay_button_press, 
+            args=(connection, play_pause_btn, exit_btn), 
+            daemon=True
+        )
         watcher.start()
 
-    # Define the region of interest for duplicate findings
-    # Top, bottom, left, right padding
-    roi = int(c.ROI_TOP * height), int(c.ROI_BOTTOM * height), int(width * c.ROI_PADDING)
-
-    # Generate ROI grid contours
-    grid_contours = generate_grid_contours(img, roi, c.GRID_PADDING)
-
-    # Remember the energy farm status
-    farm_the_energy = c.AUTO_FARM_ENERGY
+    Initiate_bot_resend_sequence(device)
 
     while True:
-        do_button_flags(img, device)
-            
-        img = get_screen_capture(device)
-
-        extracted_imgs, count_blanks = extract_imgs_from_contours(img, grid_contours)
-
-        grouped_items = group_similar_imgs(extracted_imgs, c.SIMILARITY_THRESHOLD)
-
-        check_if_should_exit(device)
-            
-        swipe_elements(device, grid_contours, grouped_items, roi)
-        
-        check_if_space_left(count_blanks, grouped_items)
-
-        # Check the energy left and matches
-        if c.CHECK_ENERGY_LEVEL and len(grouped_items) <= c.MAX_GENERATOR_GROUP_NUMBERS:
-            if (
-                generate_objects(device, grid_contours, img) == False
-                and len(grouped_items) == 0
-            ):
-                print("No group found.")
-                if farm_the_energy:
-                    print("Starting to farm energy.")
-                    farm_energy(img, device)
-                    print("Finish farming.")
-                    farm_the_energy = False
-                else:
-                    print("No energy to farm. Exit.")
-                    break
-
-        debug_display_img(img, grid_contours, grouped_items, roi, extracted_imgs)
-
-        check_if_should_exit(device)
-
-        if c.AUTOMATIC_DELIVERY:
-            try_to_delivery(device, img.shape)
+        do_button_flags(device)
+        check_color_and_tap(device, "Resend")
+        check_color_and_tap(device, "1_bag_search")
+        check_color_and_tap(device, "Start_Explore")
+        check_color_and_tap(device, "Speed_up")
+        wait_for_patch_match(device, "Bag")
+        check_color_and_tap(device, "Bag")
+        collect_and_classify_bag(device)
 
 
 if __name__ == "__main__":
