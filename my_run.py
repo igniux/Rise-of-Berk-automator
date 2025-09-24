@@ -1,5 +1,6 @@
 from ppadb.client import Client as AdbClient
-import cv2
+from PIL import Image, ImageOps
+from skimage.feature import match_template
 import numpy as np
 import time
 import configuration as c
@@ -83,7 +84,8 @@ def do_button_flags(img, device):
 # Get and image from ADB and transform it to opencv image
 def get_screen_capture(device):
     result = device.screencap()
-    img = cv2.imdecode(np.frombuffer(result, np.uint8), cv2.IMREAD_COLOR)
+    from io import BytesIO
+    img = Image.open(BytesIO(result)).convert("RGB")
     return img
 
 # Checks if the current app running on the device is Rise of Berk and the screen is on.
@@ -132,7 +134,7 @@ def fatal_error(msg, img, device=None):
     filename = f"error_{timestamp}.png"
     filepath = os.path.join(error_dir, filename)
     # Save image
-    cv2.imwrite(filepath, img)
+    img.save(filepath)
     print(f"Error screen saved to {filepath}")
     print(msg)
     # Terminate Rise of Berk app if device is not None
@@ -155,36 +157,45 @@ def Start_Rise_app(device):
             return False 
         return True
 
-def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_instead_of_press=False, timeout=2.0, last_activity_name=None, no_debugger=False):
+def locate_and_press(
+    device, template_name, action_desc, threshold=0.8, verify_instead_of_press=False,
+    timeout=2.0, last_activity_name=None, no_debugger=False, patch_size=25
+):
     do_button_flags(device)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     icons_dir = os.path.join(script_dir, "icons")
     template_path = os.path.join(icons_dir, template_name)
-    template = cv2.imread(template_path, cv2.IMREAD_UNCHANGED)
-
+    template = Image.open(template_path).convert("RGBA")
     if template is None:
         print(f"Template image {template_name} not found in icons folder.")
         return False
 
-    # Handle alpha channel (for transparent background templates)
-    if template.shape[2] == 4:
-        alpha_channel = template[:, :, 3]
-        mask = cv2.threshold(alpha_channel, 1, 255, cv2.THRESH_BINARY)[1]
-        template = cv2.cvtColor(template, cv2.COLOR_BGRA2BGR)
-    else:
-        mask = None
+    # Crop template to opaque bounding box
+    template_np = np.array(template)
+    alpha = template_np[:, :, 3]
+    ys, xs = np.where(alpha > 0)
+    if ys.size == 0 or xs.size == 0:
+        print(f"Template {template_name} has no opaque pixels!")
+        return False
+    bbox = (xs.min(), ys.min(), xs.max() + 1, ys.max() + 1)
+    template_cropped = template.crop(bbox)
+
+    # Convert to grayscale numpy arrays
+    gray_template = np.array(ImageOps.grayscale(template_cropped), dtype=np.float32)
 
     start_time = time.time()
     while time.time() - start_time < timeout:
         img = get_screen_capture(device)
-        gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        gray_template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+        gray_img = np.array(ImageOps.grayscale(img), dtype=np.float32)
 
-        result = cv2.matchTemplate(gray_img, gray_template, cv2.TM_CCOEFF_NORMED, mask=mask)
-        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+        result = match_template(gray_img, gray_template)
+        ij = np.unravel_index(np.argmax(result), result.shape)
+        y, x = ij
+        max_val = result[y, x]
+        max_loc = (x, y)
 
         if max_val >= threshold:
-            h, w = template.shape[:2]
+            h, w = gray_template.shape
             top_left = max_loc
             center_x = top_left[0] + w // 2
             center_y = top_left[1] + h // 2
@@ -193,7 +204,11 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
             key_name = template_name.replace('.png', '')
 
             # To save/update a location:
-            patch = img[center_y-10:center_y+10+1, center_x-10:center_x+10+1]
+            img_np = np.array(img)
+            patch = img_np[
+                center_y - patch_size : center_y + patch_size + 1,
+                center_x - patch_size : center_x + patch_size + 1
+            ]
             color_code = patch.mean(axis=(0,1))
             tap_info[key_name] = [center_x, center_y, color_code.tolist()]
             with open("tap_info.json", "w") as f:
@@ -264,7 +279,7 @@ def Initiate_bot_resend_sequence(device):
         return True
 
 def check_color_and_tap(
-    device, tap_target, tolerance=4, patch_size=10, timeout=2.0, tap_count=2, last_activity_name=None, verify_instead_of_press=False
+    device, tap_target, tolerance=4, patch_size=25, timeout=2.0, tap_count=2, last_activity_name=None, verify_instead_of_press=False
 ):
     start_time = time.time()
     while time.time() - start_time < timeout:
@@ -274,7 +289,8 @@ def check_color_and_tap(
             continue
         center_x, center_y, saved_color = tap_info[tap_target]
         saved_color = np.array(saved_color)
-        patch = img[center_y-patch_size:center_y+patch_size+1, center_x-patch_size:center_x+patch_size+1]
+        img_np = np.array(img)
+        patch = img_np[center_y-patch_size:center_y+patch_size+1, center_x-patch_size:center_x+patch_size+1]
         mean_color = patch.mean(axis=(0,1))
         dist = np.linalg.norm(mean_color - saved_color)
         print(f"[DEBUG] {tap_target} button color distance: {dist:.2f}")
@@ -307,7 +323,7 @@ def classify_bag_patch(mean_color, tolerance=10):
             return name
     return "unknown"
 
-def collect_and_classify_bag(device, tolerance=4, patch_size=10, timeout=2.0, tap_count=2):
+def collect_and_classify_bag(device, tolerance=4, patch_size=25, timeout=2.0, tap_count=2):
     global last_collected
     start_time = time.time()
     found = False
@@ -320,7 +336,8 @@ def collect_and_classify_bag(device, tolerance=4, patch_size=10, timeout=2.0, ta
             break
         center_x, center_y, saved_color = tap_info["Collect"]
         saved_color = np.array(saved_color)
-        patch = img[center_y-patch_size:center_y+patch_size+1, center_x-patch_size:center_x+patch_size+1]
+        img_np = np.array(img)
+        patch = img_np[center_y-patch_size:center_y+patch_size+1, center_x-patch_size:center_x+patch_size+1]
         mean_color = patch.mean(axis=(0,1))
         dist = np.linalg.norm(mean_color - saved_color)
         print(f"[DEBUG] Collect button color distance: {dist:.2f}")
@@ -373,7 +390,7 @@ def collect_and_classify_bag(device, tolerance=4, patch_size=10, timeout=2.0, ta
                 debugger(device, last_activity_name="Head_to_toothless_left_up")
                 break
 
-def wait_for_patch_match(device, target_name, tolerance=4, patch_size=10, timeout=1.5):
+def wait_for_patch_match(device, target_name, tolerance=4, patch_size=25, timeout=1.5):
     """Tap center until the patch at target_name matches its saved color."""
     start_time = time.time()
     if target_name not in tap_info:
@@ -385,7 +402,8 @@ def wait_for_patch_match(device, target_name, tolerance=4, patch_size=10, timeou
     saved_color = np.array(saved_color)
     while time.time() - start_time < timeout:
         img = get_screen_capture(device)
-        patch = img[target_y-patch_size:target_y+patch_size+1, target_x-patch_size:target_x+patch_size+1]
+        img_np = np.array(img)
+        patch = img_np[target_y-patch_size:target_y+patch_size+1, target_x-patch_size:target_x+patch_size+1]
         mean_color = patch.mean(axis=(0,1))
         dist = np.linalg.norm(mean_color - saved_color)
         print(f"[DEBUG] {target_name} patch color distance: {dist:.2f}")
@@ -456,7 +474,6 @@ def main():
         wait_for_patch_match(device, "Bag")
         check_color_and_tap(device, "Bag")
         collect_and_classify_bag(device)
-
 
 if __name__ == "__main__":
     main()
