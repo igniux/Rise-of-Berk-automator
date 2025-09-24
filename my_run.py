@@ -94,20 +94,29 @@ def check_app_in_foreground(device, target):
 
     return False
 
-def debugger(device, last_activity_name=None):
+def debugger(device, last_activity_name=None, type="check_color_and_tap"):
     if locate_and_press(device, "X.png", "Close popup"):
         print("X button found and clicked.")
         return True
     if check_color_and_tap(device, "Reconnect"):
-        print("Reconnect button found and clicked.")
-        return True
+        print("Reconnect button found and clicked. Waiting for reconnect button to clear")
+        last_seen = time.time()
+        while True:
+            if check_color_and_tap(device, "Reconnect", timeout=1.0):
+                print("[INFO] Reconnect detected and tapped. Resetting timer.")
+                last_seen = time.time()
+            else:
+                if time.time() - last_seen >= 10:
+                    print("[INFO] No Reconnect detected for 10 seconds. Proceeding.")
+                    return True
+            time.sleep(0.5)
     if last_activity_name:
         print(f"Trying last activity: {last_activity_name}")
-        if last_activity_name.endswith(".png"):
+        if type == "locate_and_press":
             if locate_and_press(device, last_activity_name, f"Try {last_activity_name}"):
                 print(f"{last_activity_name} found and pressed.")
                 return True
-        else:
+        elif type == "check_color_and_tap":
             if check_color_and_tap(device, last_activity_name):
                 print(f"{last_activity_name} found and pressed.")
                 return True
@@ -197,8 +206,9 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
         time.sleep(0.1)
     print(f"{action_desc} - Not found after {timeout} seconds.")
     # Try reconnect and last activity
-    debugger(device, last_activity_name)
-    return False
+    if debugger(device, last_activity_name, type="locate_and_press"):
+        return True  # Recovery succeeded
+    return False    # Only if debugger could not recover
 
 def swipe_up(device, img, duration_ms=500):
     """
@@ -221,12 +231,14 @@ def Initiate_bot_resend_sequence(device):
     locate_and_press(device, "Head_toothless_left_up.png", "Locate and press Head toothless left up", timeout=2)
     locate_and_press(device, "Night_Fury.png", "Verify that Night Fury is selected", verify_instead_of_press=True, timeout=2)
     locate_and_press(device, "Search_button.png", "Locate and press Search button", timeout=2)
-    swipe_up(device, img)
-    if not locate_and_press(device, "Terrible_Terror_Search_Selection.png", "Locate and press Terrible terror in the list"):
+    max_swipes = 3
+    for attempt in range(max_swipes):
+        if locate_and_press(device, "Terrible_Terror_Search_Selection.png", "Locate and press Terrible terror in the list"):
+            break
         swipe_up(device, img)
-        if not locate_and_press(device, "Terrible_Terror_Search_Selection.png", "Locate and press Terrible terror in the list"):
-            swipe_up(device, img)
-            locate_and_press(device, "Terrible_Terror_Search_Selection.png", "Locate and press Terrible terror in the list")
+    else:
+        print("[ERROR] Terrible Terror not found after swiping. Aborting or handling error.")
+        # Optionally call debugger or handle as needed
     locate_and_press(device, "1_bag_search.png", "select 1 bag search option")
     locate_and_press(device, "Start_Explore.png", "Locate and press Start Explore button")
     locate_and_press(device, "Speed_up.png", "Speed up the exploration free")
@@ -247,7 +259,9 @@ def Initiate_bot_resend_sequence(device):
             time.sleep(0.3)  # Adjust delay as needed
         return True
 
-def check_color_and_tap(device, tap_target, tolerance=4, patch_size=10, timeout=2.0, tap_count=2, last_activity_name=None):
+def check_color_and_tap(
+    device, tap_target, tolerance=4, patch_size=10, timeout=2.0, tap_count=2, last_activity_name=None, verify_instead_of_press=False
+):
     start_time = time.time()
     while time.time() - start_time < timeout:
         img = get_screen_capture(device)
@@ -262,16 +276,18 @@ def check_color_and_tap(device, tap_target, tolerance=4, patch_size=10, timeout=
         print(f"[DEBUG] {tap_target} button color distance: {dist:.2f}")
         if dist < tolerance:
             print(f"[INFO] {tap_target} button detected by color match.")
-            for _ in range(tap_count):
-                device.input_tap(center_x, center_y)
-                time.sleep(0.3)
+            if not verify_instead_of_press:
+                for _ in range(tap_count):
+                    device.input_tap(center_x, center_y)
+                    time.sleep(0.3)
             return True
         time.sleep(0.1)
     print(f"[INFO] {tap_target} button not detected within {timeout} seconds.")
     # Try reconnect and last activity
-    debugger(device, last_activity_name)
+    if debugger(device, last_activity_name):
+        return True  # Recovery succeeded, treat as success
     do_button_flags(device)
-    return False
+    return False    # Only if debugger could not recover
 
 # Example reference colors (BGR)
 COLLECT_TYPES = {
@@ -289,36 +305,35 @@ def classify_bag_patch(mean_color, tolerance=10):
 
 def collect_and_classify_bag(device, tolerance=4, patch_size=10, timeout=2.0, tap_count=2):
     global last_collected
-    found = False
     start_time = time.time()
-    targets = ["Collect", "No_thanks"]
+    found = False
+    img = None
+    # 1. Try to match and tap Collect, and use that img for classification
     while time.time() - start_time < timeout:
         img = get_screen_capture(device)
-        for target in targets:
-            if target not in tap_info:
-                print(f"[ERROR] No saved location for {target} button in tap_info.")
-                continue
-            center_x, center_y, saved_color = tap_info[target]
-            saved_color = np.array(saved_color)
-            patch = img[center_y-patch_size:center_y+patch_size+1, center_x-patch_size:center_x+patch_size+1]
-            mean_color = patch.mean(axis=(0,1))
-            dist = np.linalg.norm(mean_color - saved_color)
-            print(f"[DEBUG] {target} button color distance: {dist:.2f}")
-            if dist < tolerance:
-                print(f"[INFO] {target} button detected by color match.")
-                for _ in range(tap_count):
-                    device.input_tap(center_x, center_y)
-                    time.sleep(0.3)
-                found = True
-        if found:
+        if "Collect" not in tap_info:
+            print(f"[ERROR] No saved location for Collect button in tap_info.")
+            break
+        center_x, center_y, saved_color = tap_info["Collect"]
+        saved_color = np.array(saved_color)
+        patch = img[center_y-patch_size:center_y+patch_size+1, center_x-patch_size:center_x+patch_size+1]
+        mean_color = patch.mean(axis=(0,1))
+        dist = np.linalg.norm(mean_color - saved_color)
+        print(f"[DEBUG] Collect button color distance: {dist:.2f}")
+        if dist < tolerance:
+            print(f"[INFO] Collect button detected by color match.")
+            for _ in range(tap_count):
+                device.input_tap(center_x, center_y)
+                time.sleep(0.3)
+            found = True
             break
         time.sleep(0.1)
     if not found:
-        print(f"[INFO] Collect/No_thanks buttons not detected within {timeout} seconds.")
+        print(f"[INFO] Collect button not detected within {timeout} seconds.")
         do_button_flags(device)
-        debugger(device)
-    # Classify bag patch
-    img = get_screen_capture(device)
+        debugger(device, last_activity_name="Collect")
+
+    # 2. Classify bag patch using the same img
     if "Bag" in tap_info:
         bag_x, bag_y, _ = tap_info["Bag"]
         bag_patch = img[bag_y-patch_size:bag_y+patch_size+1, bag_x-patch_size:bag_x+patch_size+1]
@@ -328,12 +343,31 @@ def collect_and_classify_bag(device, tolerance=4, patch_size=10, timeout=2.0, ta
         print(f"[INFO] Detected collected type: {last_collected}")
     else:
         print("[WARN] Bag coordinates not found in tap_info.")
+
     if last_collected == "egg":
         check_color_and_tap(device, "Release", tolerance, patch_size, timeout, tap_count)
         check_color_and_tap(device, "Yes", tolerance, patch_size, timeout, tap_count)
         check_color_and_tap(device, "Yes_2", tolerance, patch_size, timeout, tap_count)
-        locate_and_press(device, "Head_toothless_left_up.png", "Successfully finished resend", verify_instead_of_press=True)
-        wait_for_patch_match(device, "Resend", tolerance, patch_size, timeout=2.0)
+        check_color_and_tap(device, "Head_toothless_left_up", tolerance, patch_size, timeout, tap_count, verify_instead_of_press=True)
+        max_attempts = 10
+        attempts = 0
+        while not check_color_and_tap(device, "Resend", tolerance, patch_size, timeout, tap_count, verify_instead_of_press=True):
+            device.input_tap(center_x, center_y)
+            time.sleep(0.3)
+            attempts += 1
+            if attempts >= max_attempts:
+                print("Resend not detected after multiple attempts. Exiting loop.")
+                break
+    else:
+        max_attempts = 10
+        attempts = 0
+        while not check_color_and_tap(device, "Head_to_toothless_left_up", tolerance, patch_size, timeout, tap_count, verify_instead_of_press=True):
+            check_color_and_tap(device, "No_thanks", tolerance, patch_size, timeout=1.0, tap_count=2)
+            attempts += 1
+            if attempts >= max_attempts:
+                print("Head_to_toothless_left_up not detected after multiple attempts. Exiting loop.")
+                debugger(device, last_activity_name="Head_to_toothless_left_up")
+                break
 
 def wait_for_patch_match(device, target_name, tolerance=4, patch_size=10, timeout=1.5):
     """Tap center until the patch at target_name matches its saved color."""
