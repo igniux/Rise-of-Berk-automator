@@ -155,7 +155,7 @@ def Start_Rise_app(device):
             return False 
         return True
 
-def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_instead_of_press=False, timeout=2.0, last_activity_name=None):
+def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_instead_of_press=False, timeout=2.0, last_activity_name=None, no_debugger=False):
     do_button_flags(device)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     icons_dir = os.path.join(script_dir, "icons")
@@ -206,6 +206,8 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
         time.sleep(0.1)
     print(f"{action_desc} - Not found after {timeout} seconds.")
     # Try reconnect and last activity
+    if no_debugger:
+        return False
     if debugger(device, last_activity_name, type="locate_and_press"):
         return True  # Recovery succeeded
     return False    # Only if debugger could not recover
@@ -227,34 +229,36 @@ def Initiate_bot_resend_sequence(device):
     print("Initiating bot sequence")
     img = get_screen_capture(device)
     
-    locate_and_press(device, "X.png", "Close any Limited Offers", timeout=15)
-    locate_and_press(device, "Head_toothless_left_up.png", "Locate and press Head toothless left up", timeout=2)
-    locate_and_press(device, "Night_Fury.png", "Verify that Night Fury is selected", verify_instead_of_press=True, timeout=2)
-    locate_and_press(device, "Search_button.png", "Locate and press Search button", timeout=2)
+    locate_and_press(device, "X.png", "Close any Limited Offers", timeout=15, last_activity_name="X.png")
+    locate_and_press(device, "Head_toothless_left_up.png", "Locate and press Head toothless left up", timeout=2, last_activity_name="Head_toothless_left_up.png")
+    locate_and_press(device, "Night_Fury.png", "Verify that Night Fury is selected", verify_instead_of_press=True, timeout=2, last_activity_name="Head_toothless_left_up.png")
+    locate_and_press(device, "Search_button.png", "Locate and press Search button", timeout=2, last_activity_name="Search_button.png")
     max_swipes = 3
     for attempt in range(max_swipes):
-        if locate_and_press(device, "Terrible_Terror_Search_Selection.png", "Locate and press Terrible terror in the list"):
+        if locate_and_press(device, "Terrible_Terror_Search_Selection.png", "Locate and press Terrible terror in the list", timeout=2, last_activity_name="Terrible_Terror_Search_Selection.png"):
             break
         swipe_up(device, img)
     else:
         print("[ERROR] Terrible Terror not found after swiping. Aborting or handling error.")
         # Optionally call debugger or handle as needed
-    locate_and_press(device, "1_bag_search.png", "select 1 bag search option")
-    locate_and_press(device, "Start_Explore.png", "Locate and press Start Explore button")
-    locate_and_press(device, "Speed_up.png", "Speed up the exploration free")
+    locate_and_press(device, "1_bag_search.png", "select 1 bag search option", timeout=2, last_activity_name="1_bag_search.png")
+    locate_and_press(device, "Start_Explore.png", "Locate and press Start Explore button", timeout=2, last_activity_name="Start_Explore.png")
+    locate_and_press(device, "Speed_up.png", "Speed up the exploration free", timeout=2, last_activity_name="Speed_up.png")
 
     with open("tap_info.json", "w") as f:
         json.dump(tap_info, f, indent=2)  
     device.input_tap(screen_center_x, screen_center_y)
-    locate_and_press(device, "Bag.png", "Open Bag")
-    if not locate_and_press(device, "Collect.png", "Collect toothless rewards"):
-        locate_and_press(device, "No_thanks.png", "Close Buy egg popup")
-    if locate_and_press(device, "Release.png", "Release egg"):
-        locate_and_press(device, "Yes.png", "Confirm Release egg")
-        locate_and_press(device, "Yes_2.png", "Close really popup")
-    if locate_and_press(device, "Head_toothless_left_up.png", "Locate Head toothless left up", verify_instead_of_press=True):
+    locate_and_press(device, "Bag.png", "Open Bag", timeout=5, last_activity_name="Bag.png")
+    locate_and_press(device, "Collect.png", "Collect toothless rewards", timeout=5, last_activity_name="Collect.png")
+    if locate_and_press(device, "No_thanks.png", "Close Buy egg popup", no_debugger=True, timeout=2):
+        return True
+    if locate_and_press(device, "Release.png", "Release egg", no_debugger=True, timeout=2):
+        locate_and_press(device, "Yes.png", "Confirm Release egg", timeout=2, last_activity_name="Yes.png")
+        locate_and_press(device, "Yes_2.png", "Close really popup", timeout=2, last_activity_name="Yes_2.png")
+        locate_and_press(device, "X.png", "Popup", no_debugger=True, timeout=2)
+    if locate_and_press(device, "Head_toothless_left_up.png", "Locate Head toothless left up", verify_instead_of_press=True, timeout=2):
         device.input_tap(screen_center_x, screen_center_y)
-        while not locate_and_press(device, "Resend.png", "Resend toothless button exists", verify_instead_of_press=True, timeout=0.5):
+        while not locate_and_press(device, "Resend.png", "Resend toothless button exists", verify_instead_of_press=True, timeout=0.5, last_activity_name="Head_toothless_left_up.png"):
             device.input_tap(screen_center_x, screen_center_y)
             time.sleep(0.3)  # Adjust delay as needed
         return True
