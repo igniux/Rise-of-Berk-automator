@@ -312,7 +312,7 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
                 print(f"{action_desc} - Verified at ({center_x}, {center_y}) with confidence {max_val:.2f}")
             return True
         do_button_flags(device)
-        time.sleep(0.1)
+        time.sleep(0.5)  # Small delay before next attempt
     
     # Final attempt failed - save debug screenshot
     final_img = get_screen_capture(device)
