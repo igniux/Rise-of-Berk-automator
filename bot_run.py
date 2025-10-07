@@ -1,6 +1,5 @@
 from ppadb.client import Client as AdbClient
-from PIL import Image, ImageOps
-from skimage.feature import match_template
+import cv2
 import numpy as np
 import time
 import configuration as c
@@ -9,13 +8,35 @@ import os
 import datetime  # Add this import at the top if not present
 import json
 
+# The name of the app, to check if it's running
+TARGET_APP_PKG = "com.ludia.dragons"
+TARGET_APP_ACTIVITY = "com.ludia.dragons/com.ludia.engine.application"
+
+# If you run the script directly on mobile, set this to True to disable
+# incompatible functions, like real-time image view, and configure for this
+RUN_ON_MOBILE = False
+
 # Import Termux:GUI to diplay overlay if script is running on Android
-if c.RUN_ON_MOBILE:
+if RUN_ON_MOBILE:
     import termuxgui as tg
 
-# Load tap info
-with open("tap_info.json", "r") as f:
-    tap_info = json.load(f)
+# Load or create tap_info.json
+tap_file = "tap_info.json"
+
+if not os.path.exists(tap_file):
+    print("[INFO] tap_info.json not found — creating a new one.")
+    with open(tap_file, "w") as f:
+        json.dump({}, f, indent=2)
+
+with open(tap_file, "r") as f:
+    try:
+        tap_info = json.load(f)
+    except json.JSONDecodeError:
+        print("[WARN] tap_info.json was invalid, resetting.")
+        tap_info = {}
+        with open(tap_file, "w") as fw:
+            json.dump(tap_info, fw, indent=2)
+
 
 last_collected = None  # or last_collected = ""
 
@@ -33,7 +54,7 @@ def create_overlay_button(activity, text, layout, width=40):
 # Create an overlay with buttons to control bot state
 def display_overlay_on_android(height, connection):
     activity = tg.Activity(connection, tid=110, overlay=True)
-    activity.setposition(9999, (c.DEL_TOP / 4.5) * height)
+    activity.setposition(9999, int(height * 0.1))  # Position at 10% from top
     activity.keepscreenon(True)
     activity.sendoverlayevents(False)
     
@@ -64,10 +85,10 @@ def action_on_overlay_button_press(connection, play_pause_btn, exit_btn):
             connection.toast("Closing bot")
 
 # Check the state of the button flags
-def do_button_flags(img, device):
+def do_button_flags(device):
     global pause_flag, exit_flag
-    print(f"[DEBUG] Checking flags: pause_flag={pause_flag}, exit_flag={exit_flag}")
-    if not check_app_in_foreground(device, c.TARGET_APP_PKG):
+    print(f"[DEBUG] Checking flags: pause={pause_flag}, exit={exit_flag}")
+    if not check_app_in_foreground(device, TARGET_APP_PKG):
         print("[ERROR] Rise of Berk app is not running anymore")
         exit()
     while pause_flag:
@@ -83,25 +104,48 @@ def do_button_flags(img, device):
 
 # Get and image from ADB and transform it to opencv image
 def get_screen_capture(device):
-    result = device.screencap()
-    from io import BytesIO
-    img = Image.open(BytesIO(result)).convert("RGB")
-    return img
+    try:
+        result = device.screencap()
+        img = cv2.imdecode(np.frombuffer(result, np.uint8), cv2.IMREAD_COLOR)
+        if img is not None:
+            print(f"[DEBUG] Screenshot successfull: {img.shape}")
+        else:
+            print(f"[ERROR] Screenshot decode failed")
+        return img
+    except Exception as e:
+        print(f"[ERROR] Screenshot capture failed: {e}")
+        return None
 
 # Checks if the current app running on the device is Rise of Berk and the screen is on.
 def check_app_in_foreground(device, target):
     result = device.shell("dumpsys window | grep -E 'mCurrentFocus'")
     if target in result or 'com.termux.gui' in result:
         return True
-
     return False
 
+# Global debug counter to prevent infinite recursion
+debug_call_count = 0
+
 def debugger(device, last_activity_name=None, type="check_color_and_tap"):
-    if locate_and_press(device, "X.png", "Close popup"):
+    global debug_call_count
+    debug_call_count += 1
+    
+    if debug_call_count > 5:
+        print(f"[ERROR] Debugger called {debug_call_count} times. Taking screenshot and stopping to prevent infinite loop.")
+        img = get_screen_capture(device)
+        fatal_error("Too many debugger calls - possible infinite loop", img, device)
+        debug_call_count = 0
+        return False
+    
+    print(f"[DEBUG] Debugger attempt {debug_call_count}")
+    
+    if locate_and_press(device, "X.png", "Close popup", no_debugger=True):
         print("X button found and clicked.")
+        debug_call_count = 0  # Reset on success
         return True
-    if check_color_and_tap(device, "Reconnect"):
+    elif check_color_and_tap(device, "Reconnect"):
         print("Reconnect button found and clicked. Waiting for reconnect button to clear")
+        debug_call_count = 0  # Reset on success
         last_seen = time.time()
         while True:
             if check_color_and_tap(device, "Reconnect", timeout=1.0):
@@ -112,17 +156,21 @@ def debugger(device, last_activity_name=None, type="check_color_and_tap"):
                     print("[INFO] No Reconnect detected for 10 seconds. Proceeding.")
                     return True
             time.sleep(0.5)
-    if last_activity_name:
+    elif last_activity_name:
         print(f"Trying last activity: {last_activity_name}")
         if type == "locate_and_press":
-            if locate_and_press(device, last_activity_name, f"Try {last_activity_name}"):
+            if locate_and_press(device, last_activity_name, f"Try {last_activity_name}", no_debugger=True):
                 print(f"{last_activity_name} found and pressed.")
+                debug_call_count = 0  # Reset on success
                 return True
         elif type == "check_color_and_tap":
             if check_color_and_tap(device, last_activity_name):
                 print(f"{last_activity_name} found and pressed.")
+                debug_call_count = 0  # Reset on success
                 return True
-    fatal_error("Unidentified problem", get_screen_capture(device), device)
+    
+    print("[WARNING] Debugger could not resolve the issue. Continuing...")
+    debug_call_count = 0  # Reset to prevent accumulation
     return False
             
 def fatal_error(msg, img, device=None):
@@ -134,68 +182,128 @@ def fatal_error(msg, img, device=None):
     filename = f"error_{timestamp}.png"
     filepath = os.path.join(error_dir, filename)
     # Save image
-    img.save(filepath)
+    cv2.imwrite(filepath, img)
     print(f"Error screen saved to {filepath}")
     print(msg)
     # Terminate Rise of Berk app if device is not None
     if device is not None:
-        device.shell(f"am force-stop {c.TARGET_APP_PKG}")
+        device.shell(f"am force-stop {TARGET_APP_PKG}")
     # Do not exit, just return to continue Python code
     return
 
 def Start_Rise_app(device):
-    if check_app_in_foreground(device, c.TARGET_APP_PKG):
+    if check_app_in_foreground(device, TARGET_APP_PKG):
         print("Rise of Berk app is running")
         return True
     else:
         print("Please open Rise of Berk. Waiting 25 seconds.")
         print("Attempting to start Rise of Berk app")
-        device.shell(f"monkey -p {c.TARGET_APP_PKG} -c android.intent.category.LAUNCHER 1")
-        time.sleep(15)
-        if not check_app_in_foreground(device, c.TARGET_APP_PKG):
+        
+        # Try multiple launch methods
+        try:
+            # Method 1: Using monkey command with package name only
+            print(f"[DEBUG] Launching with monkey: {TARGET_APP_PKG}")
+            result = device.shell(f"monkey -p {TARGET_APP_PKG} -c android.intent.category.LAUNCHER 1")
+            print(f"[DEBUG] Monkey result: {result}")
+        except Exception as e:
+            print(f"[ERROR] Monkey launch failed: {e}")
+            
+        time.sleep(3)
+        
+        # Method 2: Try with am start if monkey failed
+        if not check_app_in_foreground(device, TARGET_APP_PKG):
+            try:
+                print(f"[DEBUG] Trying am start with activity: {TARGET_APP_ACTIVITY}")
+                result = device.shell(f"am start -n {TARGET_APP_ACTIVITY}")
+                print(f"[DEBUG] Am start result: {result}")
+            except Exception as e:
+                print(f"[ERROR] Am start failed: {e}")
+        
+        time.sleep(10)  # Wait for app to fully load
+        if not check_app_in_foreground(device, TARGET_APP_PKG):
             fatal_error("Failed to start Rise of Berk app. Exiting script.", get_screen_capture(device))
             return False 
         return True
 
-def locate_and_press(
-    device, template_name, action_desc, threshold=0.8, verify_instead_of_press=False,
-    timeout=2.0, last_activity_name=None, no_debugger=False, patch_size=25
-):
+def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_instead_of_press=False, timeout=2.0, last_activity_name=None, no_debugger=False, patch_size=25):
     do_button_flags(device)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     icons_dir = os.path.join(script_dir, "icons")
     template_path = os.path.join(icons_dir, template_name)
-    template = Image.open(template_path).convert("RGBA")
+    template = cv2.imread(template_path, cv2.IMREAD_UNCHANGED)
+
     if template is None:
         print(f"Template image {template_name} not found in icons folder.")
         return False
 
-    # Crop template to opaque bounding box
-    template_np = np.array(template)
-    alpha = template_np[:, :, 3]
-    ys, xs = np.where(alpha > 0)
-    if ys.size == 0 or xs.size == 0:
-        print(f"Template {template_name} has no opaque pixels!")
+    print(f"[DEBUG] Template {template_name} loaded successfully: shape={template.shape}, dtype={template.dtype}")
+    
+    # Check for valid template data
+    if template.size == 0:
+        print(f"[ERROR] Template {template_name} is empty!")
         return False
-    bbox = (xs.min(), ys.min(), xs.max() + 1, ys.max() + 1)
-    template_cropped = template.crop(bbox)
 
-    # Convert to grayscale numpy arrays
-    gray_template = np.array(ImageOps.grayscale(template_cropped), dtype=np.float32)
+    # Handle alpha channel (for transparent background templates)
+    if template.shape[2] == 4:
+        print(f"[DEBUG] Template has alpha channel, creating mask")
+        alpha_channel = template[:, :, 3]
+        mask = cv2.threshold(alpha_channel, 1, 255, cv2.THRESH_BINARY)[1]
+        print(f"[DEBUG] Mask created: shape={mask.shape}, dtype={mask.dtype}, unique_values={np.unique(mask)}")
+        template = cv2.cvtColor(template, cv2.COLOR_BGRA2BGR)
+        print(f"[DEBUG] Template converted to BGR: shape={template.shape}")
+    else:
+        print(f"[DEBUG] Template has no alpha channel")
+        mask = None
 
     start_time = time.time()
+    attempt_count = 0
     while time.time() - start_time < timeout:
+        attempt_count += 1
         img = get_screen_capture(device)
-        gray_img = np.array(ImageOps.grayscale(img), dtype=np.float32)
+        print(f"[DEBUG] Screenshot captured: {img.shape if img is not None else 'Failed'}")
+        
+        if img is None:
+            print(f"[ERROR] Failed to capture screenshot on attempt {attempt_count}")
+            time.sleep(0.1)
+            continue
+            
+        gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+        
+        print(f"[DEBUG] Gray image shape: {gray_img.shape}, Gray template shape: {gray_template.shape}")
+        
+        # Check for valid dimensions
+        if gray_template.shape[0] > gray_img.shape[0] or gray_template.shape[1] > gray_img.shape[1]:
+            print(f"[ERROR] Template is larger than screenshot! Template: {gray_template.shape}, Screenshot: {gray_img.shape}")
+            return False
 
-        result = match_template(gray_img, gray_template)
-        ij = np.unravel_index(np.argmax(result), result.shape)
-        y, x = ij
-        max_val = result[y, x]
-        max_loc = (x, y)
+        result = cv2.matchTemplate(gray_img, gray_template, cv2.TM_CCOEFF_NORMED, mask=mask)
+        
+        print(f"[DEBUG] Match result shape: {result.shape}")
+        print(f"[DEBUG] Match result min/max: {np.min(result):.3f} / {np.max(result):.3f}")
+        
+        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+        
+        # Check for nan values
+        if np.isnan(max_val):
+            print(f"[ERROR] Template matching returned NaN! This indicates a problem with the images.")
+            print(f"[DEBUG] Screenshot stats: min={np.min(gray_img)}, max={np.max(gray_img)}, dtype={gray_img.dtype}")
+            print(f"[DEBUG] Template stats: min={np.min(gray_template)}, max={np.max(gray_template)}, dtype={gray_template.dtype}")
+            # Save debug images
+            cv2.imwrite(f"debug_nan_screenshot_{int(time.time())}.png", gray_img)
+            cv2.imwrite(f"debug_nan_template_{template_name}_{int(time.time())}.png", gray_template)
+            return False
+        
+        print(f"[DEBUG] {action_desc} - Attempt {attempt_count}: Max confidence = {max_val:.3f}, Threshold = {threshold}")
+        
+        # Save debug screenshot every few attempts or if this is X.png
+        if attempt_count == 1 or attempt_count % 5 == 0 or template_name == "X.png":
+            debug_filename = f"debug_{template_name.replace('.png', '')}_{attempt_count}_{max_val:.3f}.png"
+            cv2.imwrite(debug_filename, img)
+            print(f"[DEBUG] Screenshot saved: {debug_filename}")
 
         if max_val >= threshold:
-            h, w = gray_template.shape
+            h, w = template.shape[:2]
             top_left = max_loc
             center_x = top_left[0] + w // 2
             center_y = top_left[1] + h // 2
@@ -204,8 +312,7 @@ def locate_and_press(
             key_name = template_name.replace('.png', '')
 
             # To save/update a location:
-            img_np = np.array(img)
-            patch = img_np[
+            patch = img[
                 center_y - patch_size : center_y + patch_size + 1,
                 center_x - patch_size : center_x + patch_size + 1
             ]
@@ -219,11 +326,19 @@ def locate_and_press(
             return True
         do_button_flags(device)
         time.sleep(0.1)
-    print(f"{action_desc} - Not found after {timeout} seconds.")
+    
+    # Final attempt failed - save debug screenshot
+    final_img = get_screen_capture(device)
+    if final_img is not None:
+        final_debug_filename = f"debug_FINAL_{template_name.replace('.png', '')}_{int(time.time())}.png"
+        cv2.imwrite(final_debug_filename, final_img)
+        print(f"[DEBUG] Final failed screenshot saved: {final_debug_filename}")
+    
+    print(f"{action_desc} - Not found after {timeout} seconds. Total attempts: {attempt_count}")
     # Try reconnect and last activity
     if no_debugger:
         return False
-    if debugger(device, last_activity_name, type="locate_and_press"):
+    elif debugger(device, last_activity_name, type="locate_and_press"):
         return True  # Recovery succeeded
     return False    # Only if debugger could not recover
 
@@ -244,7 +359,7 @@ def Initiate_bot_resend_sequence(device):
     print("Initiating bot sequence")
     img = get_screen_capture(device)
     
-    locate_and_press(device, "X.png", "Close any Limited Offers", timeout=15, last_activity_name="X.png")
+    locate_and_press(device, "X.png", "Close any Limited Offers", timeout=15, last_activity_name="Head_toothless_left_up.png") # Should be X.png
     locate_and_press(device, "Head_toothless_left_up.png", "Locate and press Head toothless left up", timeout=2, last_activity_name="Head_toothless_left_up.png")
     locate_and_press(device, "Night_Fury.png", "Verify that Night Fury is selected", verify_instead_of_press=True, timeout=2, last_activity_name="Head_toothless_left_up.png")
     locate_and_press(device, "Search_button.png", "Locate and press Search button", timeout=2, last_activity_name="Search_button.png")
@@ -290,8 +405,7 @@ def check_color_and_tap(
             continue
         center_x, center_y, saved_color = tap_info[tap_target]
         saved_color = np.array(saved_color)
-        img_np = np.array(img)
-        patch = img_np[center_y-patch_size:center_y+patch_size+1, center_x-patch_size:center_x+patch_size+1]
+        patch = img[center_y-patch_size:center_y+patch_size+1, center_x-patch_size:center_x+patch_size+1]
         mean_color = patch.mean(axis=(0,1))
         dist = np.linalg.norm(mean_color - saved_color)
         print(f"[DEBUG] {tap_target} button color distance: {dist:.2f}")
@@ -324,7 +438,7 @@ def classify_bag_patch(mean_color, tolerance=10):
             return name
     return "unknown"
 
-def collect_and_classify_bag(device, tolerance=4, patch_size=25, timeout=2.0, tap_count=2):
+def collect_and_classify_bag(device, tolerance=4, patch_size=10, timeout=2.0, tap_count=2):
     global last_collected
     start_time = time.time()
     found = False
@@ -337,8 +451,7 @@ def collect_and_classify_bag(device, tolerance=4, patch_size=25, timeout=2.0, ta
             break
         center_x, center_y, saved_color = tap_info["Collect"]
         saved_color = np.array(saved_color)
-        img_np = np.array(img)
-        patch = img_np[center_y-patch_size:center_y+patch_size+1, center_x-patch_size:center_x+patch_size+1]
+        patch = img[center_y-patch_size:center_y+patch_size+1, center_x-patch_size:center_x+patch_size+1]
         mean_color = patch.mean(axis=(0,1))
         dist = np.linalg.norm(mean_color - saved_color)
         print(f"[DEBUG] Collect button color distance: {dist:.2f}")
@@ -391,7 +504,7 @@ def collect_and_classify_bag(device, tolerance=4, patch_size=25, timeout=2.0, ta
                 debugger(device, last_activity_name="Head_to_toothless_left_up")
                 break
 
-def wait_for_patch_match(device, target_name, tolerance=4, patch_size=25, timeout=1.5):
+def wait_for_patch_match(device, target_name, tolerance=4, patch_size=10, timeout=1.5):
     """Tap center until the patch at target_name matches its saved color."""
     start_time = time.time()
     if target_name not in tap_info:
@@ -403,8 +516,7 @@ def wait_for_patch_match(device, target_name, tolerance=4, patch_size=25, timeou
     saved_color = np.array(saved_color)
     while time.time() - start_time < timeout:
         img = get_screen_capture(device)
-        img_np = np.array(img)
-        patch = img_np[target_y-patch_size:target_y+patch_size+1, target_x-patch_size:target_x+patch_size+1]
+        patch = img[target_y-patch_size:target_y+patch_size+1, target_x-patch_size:target_x+patch_size+1]
         mean_color = patch.mean(axis=(0,1))
         dist = np.linalg.norm(mean_color - saved_color)
         print(f"[DEBUG] {target_name} patch color distance: {dist:.2f}")
@@ -432,12 +544,12 @@ def main():
     devices = client.devices()
     
     # Create an Termux:GUI connection
-    if c.RUN_ON_MOBILE:
+    if RUN_ON_MOBILE:
         connection = tg.Connection()
 
     # If no device is detected, open the developer options
     if len(devices) == 0:
-        if c.RUN_ON_MOBILE:
+        if RUN_ON_MOBILE:
             connection.toast("Please connect to ADB Wi-Fi IP from developer options", long = True)
             os.system("am start -a com.android.settings.APPLICATION_DEVELOPMENT_SETTINGS")
         print("No device found. Please connect to device using ADB!")
@@ -455,7 +567,7 @@ def main():
     screen_center_x = screen_width // 2
     screen_center_y = screen_height // 2
     # Display control overlay on mobile and create an thread to verify input
-    if c.RUN_ON_MOBILE:
+    if RUN_ON_MOBILE:
         play_pause_btn, exit_btn = display_overlay_on_android(screen_height, connection)
         watcher = threading.Thread(
             target=action_on_overlay_button_press, 
@@ -475,6 +587,7 @@ def main():
         wait_for_patch_match(device, "Bag")
         check_color_and_tap(device, "Bag")
         collect_and_classify_bag(device)
+
 
 if __name__ == "__main__":
     main()
