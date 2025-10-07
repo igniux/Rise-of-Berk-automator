@@ -346,9 +346,9 @@ def Initiate_bot_resend_sequence(device):
     print("Initiating bot sequence")
     img = get_screen_capture(device)
     
-    locate_and_press(device, "X.png", "Close any Limited Offers", timeout=15, last_activity_name="X.png") 
+    locate_and_press(device, "X.png", "Close any Limited Offers", timeout=25, last_activity_name="X.png") 
     locate_and_press(device, "Head_toothless_left_up.png", "Locate and press Head toothless left up", timeout=5, last_activity_name="Head_toothless_left_up.png")
-    locate_and_press(device, "Night_Fury.png", "Verify that Night Fury is selected", verify_instead_of_press=True, timeout=2, last_activity_name="Head_toothless_left_up.png")
+    locate_and_press(device, "Night_Fury.png", "Verify that Night Fury is selected", verify_instead_of_press=True, timeout=2)
     locate_and_press(device, "Search_Button.png", "Locate and press Search button", timeout=2, last_activity_name="Search_Button.png")
     max_swipes = 3
     for attempt in range(max_swipes):
