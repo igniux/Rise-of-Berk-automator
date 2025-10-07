@@ -349,7 +349,7 @@ def Initiate_bot_resend_sequence(device):
     locate_and_press(device, "X.png", "Close any Limited Offers", timeout=15, last_activity_name="X.png") 
     locate_and_press(device, "Head_toothless_left_up.png", "Locate and press Head toothless left up", timeout=2, last_activity_name="Head_toothless_left_up.png")
     locate_and_press(device, "Night_Fury.png", "Verify that Night Fury is selected", verify_instead_of_press=True, timeout=2, last_activity_name="Head_toothless_left_up.png")
-    locate_and_press(device, "Search_button.png", "Locate and press Search button", timeout=2, last_activity_name="Search_button.png")
+    locate_and_press(device, "Search_Button.png", "Locate and press Search button", timeout=2, last_activity_name="Search_button.png")
     max_swipes = 3
     for attempt in range(max_swipes):
         if locate_and_press(device, "Terrible_Terror_Search_Selection.png", "Locate and press Terrible terror in the list", timeout=2, last_activity_name="Terrible_Terror_Search_Selection.png"):
