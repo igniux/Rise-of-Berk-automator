@@ -98,7 +98,7 @@ def debugger(device, last_activity_name=None, type="check_color_and_tap"):
     if locate_and_press(device, "X.png", "Close popup"):
         print("X button found and clicked.")
         return True
-    if check_color_and_tap(device, "Reconnect"):
+    elif check_color_and_tap(device, "Reconnect"):
         print("Reconnect button found and clicked. Waiting for reconnect button to clear")
         last_seen = time.time()
         while True:
@@ -110,7 +110,7 @@ def debugger(device, last_activity_name=None, type="check_color_and_tap"):
                     print("[INFO] No Reconnect detected for 10 seconds. Proceeding.")
                     return True
             time.sleep(0.5)
-    if last_activity_name:
+    elif last_activity_name:
         print(f"Trying last activity: {last_activity_name}")
         if type == "locate_and_press":
             if locate_and_press(device, last_activity_name, f"Try {last_activity_name}"):
@@ -211,7 +211,7 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
     # Try reconnect and last activity
     if no_debugger:
         return False
-    if debugger(device, last_activity_name, type="locate_and_press"):
+    elif debugger(device, last_activity_name, type="locate_and_press"):
         return True  # Recovery succeeded
     return False    # Only if debugger could not recover
 
@@ -232,7 +232,7 @@ def Initiate_bot_resend_sequence(device):
     print("Initiating bot sequence")
     img = get_screen_capture(device)
     
-    locate_and_press(device, "X.png", "Close any Limited Offers", timeout=15, last_activity_name="X.png")
+    locate_and_press(device, "X.png", "Close any Limited Offers", timeout=15, last_activity_name="Head_toothless_left_up.png") # Should be X.png
     locate_and_press(device, "Head_toothless_left_up.png", "Locate and press Head toothless left up", timeout=2, last_activity_name="Head_toothless_left_up.png")
     locate_and_press(device, "Night_Fury.png", "Verify that Night Fury is selected", verify_instead_of_press=True, timeout=2, last_activity_name="Head_toothless_left_up.png")
     locate_and_press(device, "Search_button.png", "Locate and press Search button", timeout=2, last_activity_name="Search_button.png")
