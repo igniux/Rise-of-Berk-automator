@@ -4,10 +4,12 @@ import os
 
 # Get the folder where the script is running
 script_dir = os.path.dirname(os.path.abspath(__file__))
+# Get the parent directory (main project folder)
+parent_dir = os.path.dirname(script_dir)
 
 # Build paths relative to the script folder
-image_a_path = os.path.join(script_dir, "Find_X.png")
-logo_b_path = os.path.join(script_dir, "X.png")
+image_a_path = os.path.join(script_dir, "Screenshot_2025-10-07-21-19-07-449_com.ludia.dragons.jpg")
+logo_b_path = os.path.join(parent_dir, "icons", "X.png")
 
 # Load images
 image_a = cv2.imread(image_a_path)

@@ -6,8 +6,8 @@ import os
 # Set up paths
 script_dir = os.path.dirname(os.path.abspath(__file__))
 icons_dir = os.path.join(os.path.dirname(script_dir), "icons")
-screen_img_path = os.path.join(script_dir, "Screenshot_20250921_141435_com.ludia.dragons.jpg")
-template_path = os.path.join(icons_dir, "Collect.png ")
+screen_img_path = os.path.join(script_dir, "Screenshot_2025-10-07-21-19-07-449_com.ludia.dragons.jpg")
+template_path = os.path.join(icons_dir, "X.png ")
 
 # Load images
 img = Image.open(screen_img_path).convert("RGB")

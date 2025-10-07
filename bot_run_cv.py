@@ -82,9 +82,17 @@ def do_button_flags(device):
 
 # Get and image from ADB and transform it to opencv image
 def get_screen_capture(device):
-    result = device.screencap()
-    img = cv2.imdecode(np.frombuffer(result, np.uint8), cv2.IMREAD_COLOR)
-    return img
+    try:
+        result = device.screencap()
+        img = cv2.imdecode(np.frombuffer(result, np.uint8), cv2.IMREAD_COLOR)
+        if img is not None:
+            print(f"[DEBUG] Screenshot captured successfully: {img.shape}")
+        else:
+            print(f"[ERROR] Screenshot decode failed")
+        return img
+    except Exception as e:
+        print(f"[ERROR] Screenshot capture failed: {e}")
+        return None
 
 # Checks if the current app running on the device is Rise of Berk and the screen is on.
 def check_app_in_foreground(device, target):
@@ -94,12 +102,29 @@ def check_app_in_foreground(device, target):
 
     return False
 
+# Global debug counter to prevent infinite recursion
+debug_call_count = 0
+
 def debugger(device, last_activity_name=None, type="check_color_and_tap"):
-    if locate_and_press(device, "X.png", "Close popup"):
+    global debug_call_count
+    debug_call_count += 1
+    
+    if debug_call_count > 5:
+        print(f"[ERROR] Debugger called {debug_call_count} times. Taking screenshot and stopping to prevent infinite loop.")
+        img = get_screen_capture(device)
+        fatal_error("Too many debugger calls - possible infinite loop", img, device)
+        debug_call_count = 0
+        return False
+    
+    print(f"[DEBUG] Debugger attempt {debug_call_count}")
+    
+    if locate_and_press(device, "X.png", "Close popup", no_debugger=True):
         print("X button found and clicked.")
+        debug_call_count = 0  # Reset on success
         return True
     elif check_color_and_tap(device, "Reconnect"):
         print("Reconnect button found and clicked. Waiting for reconnect button to clear")
+        debug_call_count = 0  # Reset on success
         last_seen = time.time()
         while True:
             if check_color_and_tap(device, "Reconnect", timeout=1.0):
@@ -113,14 +138,18 @@ def debugger(device, last_activity_name=None, type="check_color_and_tap"):
     elif last_activity_name:
         print(f"Trying last activity: {last_activity_name}")
         if type == "locate_and_press":
-            if locate_and_press(device, last_activity_name, f"Try {last_activity_name}"):
+            if locate_and_press(device, last_activity_name, f"Try {last_activity_name}", no_debugger=True):
                 print(f"{last_activity_name} found and pressed.")
+                debug_call_count = 0  # Reset on success
                 return True
         elif type == "check_color_and_tap":
             if check_color_and_tap(device, last_activity_name):
                 print(f"{last_activity_name} found and pressed.")
+                debug_call_count = 0  # Reset on success
                 return True
-    fatal_error("Unidentified problem", get_screen_capture(device), device)
+    
+    print("[WARNING] Debugger could not resolve the issue. Continuing...")
+    debug_call_count = 0  # Reset to prevent accumulation
     return False
             
 def fatal_error(msg, img, device=None):
@@ -175,13 +204,30 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
         mask = None
 
     start_time = time.time()
+    attempt_count = 0
     while time.time() - start_time < timeout:
+        attempt_count += 1
         img = get_screen_capture(device)
+        print(f"[DEBUG] Screenshot captured: {img.shape if img is not None else 'Failed'}")
+        
+        if img is None:
+            print(f"[ERROR] Failed to capture screenshot on attempt {attempt_count}")
+            time.sleep(0.1)
+            continue
+            
         gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         gray_template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
 
         result = cv2.matchTemplate(gray_img, gray_template, cv2.TM_CCOEFF_NORMED, mask=mask)
         _, max_val, _, max_loc = cv2.minMaxLoc(result)
+        
+        print(f"[DEBUG] {action_desc} - Attempt {attempt_count}: Max confidence = {max_val:.3f}, Threshold = {threshold}")
+        
+        # Save debug screenshot every few attempts or if this is X.png
+        if attempt_count == 1 or attempt_count % 5 == 0 or template_name == "X.png":
+            debug_filename = f"debug_{template_name.replace('.png', '')}_{attempt_count}_{max_val:.3f}.png"
+            cv2.imwrite(debug_filename, img)
+            print(f"[DEBUG] Screenshot saved: {debug_filename}")
 
         if max_val >= threshold:
             h, w = template.shape[:2]
@@ -207,7 +253,15 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
             return True
         do_button_flags(device)
         time.sleep(0.1)
-    print(f"{action_desc} - Not found after {timeout} seconds.")
+    
+    # Final attempt failed - save debug screenshot
+    final_img = get_screen_capture(device)
+    if final_img is not None:
+        final_debug_filename = f"debug_FINAL_{template_name.replace('.png', '')}_{int(time.time())}.png"
+        cv2.imwrite(final_debug_filename, final_img)
+        print(f"[DEBUG] Final failed screenshot saved: {final_debug_filename}")
+    
+    print(f"{action_desc} - Not found after {timeout} seconds. Total attempts: {attempt_count}")
     # Try reconnect and last activity
     if no_debugger:
         return False
