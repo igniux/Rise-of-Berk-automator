@@ -209,12 +209,23 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
         print(f"Template image {template_name} not found in icons folder.")
         return False
 
+    print(f"[DEBUG] Template {template_name} loaded successfully: shape={template.shape}, dtype={template.dtype}")
+    
+    # Check for valid template data
+    if template.size == 0:
+        print(f"[ERROR] Template {template_name} is empty!")
+        return False
+
     # Handle alpha channel (for transparent background templates)
     if template.shape[2] == 4:
+        print(f"[DEBUG] Template has alpha channel, creating mask")
         alpha_channel = template[:, :, 3]
         mask = cv2.threshold(alpha_channel, 1, 255, cv2.THRESH_BINARY)[1]
+        print(f"[DEBUG] Mask created: shape={mask.shape}, dtype={mask.dtype}, unique_values={np.unique(mask)}")
         template = cv2.cvtColor(template, cv2.COLOR_BGRA2BGR)
+        print(f"[DEBUG] Template converted to BGR: shape={template.shape}")
     else:
+        print(f"[DEBUG] Template has no alpha channel")
         mask = None
 
     start_time = time.time()
@@ -231,9 +242,30 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
             
         gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         gray_template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+        
+        print(f"[DEBUG] Gray image shape: {gray_img.shape}, Gray template shape: {gray_template.shape}")
+        
+        # Check for valid dimensions
+        if gray_template.shape[0] > gray_img.shape[0] or gray_template.shape[1] > gray_img.shape[1]:
+            print(f"[ERROR] Template is larger than screenshot! Template: {gray_template.shape}, Screenshot: {gray_img.shape}")
+            return False
 
         result = cv2.matchTemplate(gray_img, gray_template, cv2.TM_CCOEFF_NORMED, mask=mask)
+        
+        print(f"[DEBUG] Match result shape: {result.shape}")
+        print(f"[DEBUG] Match result min/max: {np.min(result):.3f} / {np.max(result):.3f}")
+        
         _, max_val, _, max_loc = cv2.minMaxLoc(result)
+        
+        # Check for nan values
+        if np.isnan(max_val):
+            print(f"[ERROR] Template matching returned NaN! This indicates a problem with the images.")
+            print(f"[DEBUG] Screenshot stats: min={np.min(gray_img)}, max={np.max(gray_img)}, dtype={gray_img.dtype}")
+            print(f"[DEBUG] Template stats: min={np.min(gray_template)}, max={np.max(gray_template)}, dtype={gray_template.dtype}")
+            # Save debug images
+            cv2.imwrite(f"debug_nan_screenshot_{int(time.time())}.png", gray_img)
+            cv2.imwrite(f"debug_nan_template_{template_name}_{int(time.time())}.png", gray_template)
+            return False
         
         print(f"[DEBUG] {action_desc} - Attempt {attempt_count}: Max confidence = {max_val:.3f}, Threshold = {threshold}")
         
