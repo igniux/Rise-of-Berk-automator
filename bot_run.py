@@ -235,7 +235,7 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
         print(f"Template image {template_name} not found in icons folder.")
         return False
 
-    print(f"[DEBUG] Template {template_name} loaded successfully: shape={template.shape}, dtype={template.dtype}")
+    print(f"[DEBUG] Template {template_name} loaded successfully")
     
     # Check for valid template data
     if template.size == 0:
@@ -244,12 +244,9 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
 
     # Handle alpha channel (for transparent background templates)
     if template.shape[2] == 4:
-        print(f"[DEBUG] Template has alpha channel, creating mask")
         alpha_channel = template[:, :, 3]
         mask = cv2.threshold(alpha_channel, 1, 255, cv2.THRESH_BINARY)[1]
-        print(f"[DEBUG] Mask created: shape={mask.shape}, dtype={mask.dtype}, unique_values={np.unique(mask)}")
         template = cv2.cvtColor(template, cv2.COLOR_BGRA2BGR)
-        print(f"[DEBUG] Template converted to BGR: shape={template.shape}")
     else:
         print(f"[DEBUG] Template has no alpha channel")
         mask = None
@@ -259,7 +256,6 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
     while time.time() - start_time < timeout:
         attempt_count += 1
         img = get_screen_capture(device)
-        print(f"[DEBUG] Screenshot captured: {img.shape if img is not None else 'Failed'}")
         
         if img is None:
             print(f"[ERROR] Failed to capture screenshot on attempt {attempt_count}")
