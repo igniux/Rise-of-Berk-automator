@@ -65,7 +65,7 @@ def action_on_overlay_button_press(connection, play_pause_btn, exit_btn):
 # Check the state of the button flags
 def do_button_flags(device):
     global pause_flag, exit_flag
-    print(f"[DEBUG] Checking flags: pause_flag={pause_flag}, exit_flag={exit_flag}")
+    print(f"[DEBUG] Checking flags: pause={pause_flag}, exit={exit_flag}")
     if not check_app_in_foreground(device, c.TARGET_APP_PKG):
         print("[ERROR] Rise of Berk app is not running anymore")
         exit()
