@@ -12,9 +12,23 @@ import json
 if c.RUN_ON_MOBILE:
     import termuxgui as tg
 
-# Load tap info
-with open("tap_info.json", "r") as f:
-    tap_info = json.load(f)
+# Load or create tap_info.json
+tap_file = "tap_info.json"
+
+if not os.path.exists(tap_file):
+    print("[INFO] tap_info.json not found — creating a new one.")
+    with open(tap_file, "w") as f:
+        json.dump({}, f, indent=2)
+
+with open(tap_file, "r") as f:
+    try:
+        tap_info = json.load(f)
+    except json.JSONDecodeError:
+        print("[WARN] tap_info.json was invalid, resetting.")
+        tap_info = {}
+        with open(tap_file, "w") as fw:
+            json.dump(tap_info, fw, indent=2)
+
 
 last_collected = None  # or last_collected = ""
 
