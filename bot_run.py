@@ -87,7 +87,7 @@ def action_on_overlay_button_press(connection, play_pause_btn, exit_btn):
 # Check the state of the button flags
 def do_button_flags(device):
     global pause_flag, exit_flag
-    print(f"[DEBUG] Checking flags: pause={pause_flag}, exit={exit_flag}")
+    print(f"-")
     if not check_app_in_foreground(device, TARGET_APP_PKG):
         print("[ERROR] Rise of Berk app is not running anymore")
         exit()
@@ -219,7 +219,6 @@ def Start_Rise_app(device):
             except Exception as e:
                 print(f"[ERROR] Am start failed: {e}")
         
-        time.sleep(10)  # Wait for app to fully load
         if not check_app_in_foreground(device, TARGET_APP_PKG):
             fatal_error("Failed to start Rise of Berk app. Exiting script.", get_screen_capture(device))
             return False 
@@ -270,16 +269,8 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
         gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         gray_template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
         
-        print(f"[DEBUG] Gray image shape: {gray_img.shape}, Gray template shape: {gray_template.shape}")
-        
-        # Check for valid dimensions
-        if gray_template.shape[0] > gray_img.shape[0] or gray_template.shape[1] > gray_img.shape[1]:
-            print(f"[ERROR] Template is larger than screenshot! Template: {gray_template.shape}, Screenshot: {gray_img.shape}")
-            return False
-
         result = cv2.matchTemplate(gray_img, gray_template, cv2.TM_CCOEFF_NORMED, mask=mask)
         
-        print(f"[DEBUG] Match result shape: {result.shape}")
         print(f"[DEBUG] Match result min/max: {np.min(result):.3f} / {np.max(result):.3f}")
         
         _, max_val, _, max_loc = cv2.minMaxLoc(result)
@@ -295,12 +286,6 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
             return False
         
         print(f"[DEBUG] {action_desc} - Attempt {attempt_count}: Max confidence = {max_val:.3f}, Threshold = {threshold}")
-        
-        # Save debug screenshot every few attempts or if this is X.png
-        if attempt_count == 1 or attempt_count % 5 == 0 or template_name == "X.png":
-            debug_filename = f"debug_{template_name.replace('.png', '')}_{attempt_count}_{max_val:.3f}.png"
-            cv2.imwrite(debug_filename, img)
-            print(f"[DEBUG] Screenshot saved: {debug_filename}")
 
         if max_val >= threshold:
             h, w = template.shape[:2]
@@ -317,12 +302,18 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
                 center_x - patch_size : center_x + patch_size + 1
             ]
             color_code = patch.mean(axis=(0,1))
+            print(f"[DEBUG] Patch color: {color_code}")
+            
             tap_info[key_name] = [center_x, center_y, color_code.tolist()]
             with open("tap_info.json", "w") as f:
                 json.dump(tap_info, f, indent=2)
+            print(f"[DEBUG] Saved to tap_info: {key_name} -> [{center_x}, {center_y}, color]")
+            
             if not verify_instead_of_press:
-                device.input_tap(center_x, center_y)
+                device.shell(f"input tap {center_x} {center_y}")
                 print(f"{action_desc} - Pressed at ({center_x}, {center_y}) with confidence {max_val:.2f}")
+            else:
+                print(f"{action_desc} - Verified at ({center_x}, {center_y}) with confidence {max_val:.2f}")
             return True
         do_button_flags(device)
         time.sleep(0.1)
@@ -359,7 +350,7 @@ def Initiate_bot_resend_sequence(device):
     print("Initiating bot sequence")
     img = get_screen_capture(device)
     
-    locate_and_press(device, "X.png", "Close any Limited Offers", timeout=15, last_activity_name="Head_toothless_left_up.png") # Should be X.png
+    locate_and_press(device, "X.png", "Close any Limited Offers", timeout=15, last_activity_name="X.png") 
     locate_and_press(device, "Head_toothless_left_up.png", "Locate and press Head toothless left up", timeout=2, last_activity_name="Head_toothless_left_up.png")
     locate_and_press(device, "Night_Fury.png", "Verify that Night Fury is selected", verify_instead_of_press=True, timeout=2, last_activity_name="Head_toothless_left_up.png")
     locate_and_press(device, "Search_button.png", "Locate and press Search button", timeout=2, last_activity_name="Search_button.png")
