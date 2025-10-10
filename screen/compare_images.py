@@ -8,8 +8,8 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(script_dir)
 
 # Build paths relative to the script folder
-image_a_path = os.path.join(script_dir, "1759873576086.jpg")
-logo_b_path = os.path.join(parent_dir, "icons", "Night_Fury.png")
+image_a_path = os.path.join(script_dir, "debug_FINAL_Night_Fury_1759906803.png")
+logo_b_path = os.path.join(parent_dir, "icons", "Head_toothless_left_up.png")
 
 # Load images
 image_a = cv2.imread(image_a_path)
