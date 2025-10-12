@@ -14,7 +14,7 @@ TARGET_APP_ACTIVITY = "com.ludia.dragons/com.ludia.engine.application"
 
 # If you run the script directly on mobile, set this to True to disable
 # incompatible functions, like real-time image view, and configure for this
-RUN_ON_MOBILE = False
+RUN_ON_MOBILE = True
 
 # Import Termux:GUI to diplay overlay if script is running on Android
 if RUN_ON_MOBILE:
