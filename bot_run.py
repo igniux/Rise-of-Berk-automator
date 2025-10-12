@@ -7,6 +7,19 @@ import os
 import datetime  # Add this import at the top if not present
 import json
 
+# Add this after the imports
+def make_json_serializable(obj):
+    """Convert numpy types to JSON-serializable types"""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return [make_json_serializable(x) for x in obj.tolist()]
+    elif isinstance(obj, list):
+        return [make_json_serializable(x) for x in obj]
+    return obj
+
 try:
     import cv2
     # Test if cv2.imdecode exists
@@ -386,7 +399,7 @@ def locate_and_press(device, template_configs, action_desc, threshold=0.95, time
             print(f"[DEBUG] Patch color: {color_code}")
             
             if not verify_only:
-                tap_info[key_name] = [center_x, center_y, color_code.tolist()]
+                tap_info[key_name] = make_json_serializable([center_x, center_y, color_code.tolist()])
                 with open("tap_info.json", "w") as f:
                     json.dump(tap_info, f, indent=2)
                 print(f"[DEBUG] Saved to tap_info: {key_name} -> [{center_x}, {center_y}, color]")
@@ -395,7 +408,7 @@ def locate_and_press(device, template_configs, action_desc, threshold=0.95, time
                 device.input_tap(center_x, center_y)
                 print(f"\033[92m✅ {action_desc} - PRESSED {template_name} at ({center_x}, {center_y}) with confidence {max_val:.2f}\033[0m")
             else:
-                tap_info[key_name] = [center_x, center_y, color_code.tolist()]
+                tap_info[key_name] = make_json_serializable([center_x, center_y, color_code.tolist()])
                 with open("tap_info.json", "w") as f:
                     json.dump(tap_info, f, indent=2)
                 print(f"[DEBUG] Saved to tap_info: {key_name} -> [{center_x}, {center_y}, color]")
