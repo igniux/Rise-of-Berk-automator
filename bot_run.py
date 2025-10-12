@@ -737,6 +737,41 @@ def wait_for_patch_match(device, target_name, tolerance=4, patch_size=10, timeou
     print(f"[INFO] {target_name} patch not matched within {timeout} seconds.")
     return False
 
+def get_screen_resolution(device):
+    """Get actual screen resolution from device"""
+    try:
+        # Get screen size using wm size command
+        result = device.shell("wm size")
+        print(f"[DEBUG] wm size result: {result}")
+        
+        # Parse result like "Physical size: 1080x2340"
+        if ":" in result:
+            size_part = result.split(":")[-1].strip()
+            if "x" in size_part:
+                width, height = map(int, size_part.split("x"))
+                print(f"[INFO] Detected screen resolution: {width}x{height}")
+                return width, height
+                
+        # Fallback: try dumpsys display
+        result = device.shell("dumpsys display | grep 'mBaseDisplayInfo'")
+        print(f"[DEBUG] dumpsys result: {result}")
+        
+        # Look for patterns like "1080 x 2340"
+        import re
+        pattern = r'(\d+)\s*x\s*(\d+)'
+        match = re.search(pattern, result)
+        if match:
+            width, height = int(match.group(1)), int(match.group(2))
+            print(f"[INFO] Detected screen resolution from dumpsys: {width}x{height}")
+            return width, height
+            
+    except Exception as e:
+        print(f"[ERROR] Failed to get screen resolution: {e}")
+    
+    # Fallback to common resolutions
+    print("[WARNING] Using fallback resolution 1080x2340")
+    return 1080, 2340
+
 def main():
     global screen_height, screen_width, screen_center_x, screen_center_y  # Add this line
     print("Make sure you are connected to the ADB, check `adb devices`!\n")
