@@ -9,8 +9,11 @@ import json
 
 try:
     import cv2
+    # Test if cv2.imdecode exists
+    if not hasattr(cv2, 'imdecode'):
+        raise AttributeError("cv2.imdecode not available")
     print("[INFO] Using system OpenCV")
-except ImportError:
+except (ImportError, AttributeError):
     print("[INFO] Using OpenCV compatibility layer")
     from cv2_compat import cv2
 
