@@ -124,7 +124,7 @@ def check_app_in_foreground(device, target):
 # Global debug counter to prevent infinite recursion
 debug_call_count = 0
 
-def debugger(device, last_activity_name=None, type="check_color_and_tap"):
+def debugger(device, template_name=None, type="check_color_and_tap"):
     global debug_call_count
     debug_call_count += 1
     
@@ -154,16 +154,16 @@ def debugger(device, last_activity_name=None, type="check_color_and_tap"):
                     print("[INFO] No Reconnect detected for 10 seconds. Proceeding.")
                     return True
             time.sleep(0.5)
-    elif last_activity_name:
-        print(f"Trying last activity: {last_activity_name}")
+    elif template_name:
+        print(f"Trying last activity: {template_name}")
         if type == "locate_and_press":
-            if locate_and_press(device, last_activity_name, f"Try {last_activity_name}", no_debugger=True):
-                print(f"{last_activity_name} found and pressed.")
+            if locate_and_press(device, template_name, f"Try {template_name}", no_debugger=True):
+                print(f"{template_name} found and pressed.")
                 debug_call_count = 0  # Reset on success
                 return True
         elif type == "check_color_and_tap":
-            if check_color_and_tap(device, last_activity_name):
-                print(f"{last_activity_name} found and pressed.")
+            if check_color_and_tap(device, template_name):
+                print(f"{template_name} found and pressed.")
                 debug_call_count = 0  # Reset on success
                 return True
     
@@ -226,74 +226,99 @@ def Start_Rise_app(device):
             return False 
         return True
 
-def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_instead_of_press=False, timeout=2.0, last_activity_name=None, no_debugger=False, patch_size=25):
+def locate_and_press(device, template_names, action_desc, threshold=0.8, verify_instead_of_press=False, timeout=4.0, last_activity_name=None, no_debugger=False, patch_size=25):
     do_button_flags(device)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     icons_dir = os.path.join(script_dir, "icons")
-    template_path = os.path.join(icons_dir, template_name)
-    template = cv2.imread(template_path, cv2.IMREAD_UNCHANGED)
+    
+    # Handle both single template and list of templates
+    if isinstance(template_names, str):
+        template_names = [template_names]
+    
+    # Load all templates
+    templates = []
+    for template_name in template_names:
+        template_path = os.path.join(icons_dir, template_name)
+        template = cv2.imread(template_path, cv2.IMREAD_UNCHANGED)
+        
+        if template is None:
+            print(f"Template image {template_name} not found in icons folder.")
+            continue
+            
+        # Handle alpha channel
+        if template.shape[2] == 4:
+            alpha_channel = template[:, :, 3]
+            mask = cv2.threshold(alpha_channel, 1, 255, cv2.THRESH_BINARY)[1]
+            template = cv2.cvtColor(template, cv2.COLOR_BGRA2BGR)
+        else:
+            mask = None
+            
+        templates.append((template_name, template, mask))
+        print(f"[DEBUG] Template {template_name} loaded successfully")
 
-    if template is None:
-        print(f"Template image {template_name} not found in icons folder.")
+    if not templates:
+        print(f"No valid templates found from {template_names}")
         return False
-
-    print(f"[DEBUG] Template {template_name} loaded successfully")
-
-    # Handle alpha channel (exactly like compare_images.py)
-    if template.shape[2] == 4:
-        alpha_channel = template[:, :, 3]
-        mask = cv2.threshold(alpha_channel, 1, 255, cv2.THRESH_BINARY)[1]
-        template = cv2.cvtColor(template, cv2.COLOR_BGRA2BGR)
-    else:
-        print(f"[DEBUG] Template has no alpha channel")
-        mask = None
 
     start_time = time.time()
     attempt_count = 0
+    found = False
+    
     while time.time() - start_time < timeout:
         attempt_count += 1
         
-        # Time image acquisition
+        # Time image acquisition (only once per attempt)
         img_start_time = time.time()
         img = get_screen_capture(device)
         img_end_time = time.time()
-        img_acquisition_time = (img_end_time - img_start_time) * 1000  # Convert to milliseconds
+        img_acquisition_time = (img_end_time - img_start_time) * 1000
         print(f"[TIMING] Image acquisition took: {img_acquisition_time:.2f}ms")
 
-        # Time image processing start
-        processing_start_time = time.time()
+        # Convert to grayscale once
         gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        gray_template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
         
-        # Try masked template matching first (if mask available)
-        if mask is not None:
-            result = cv2.matchTemplate(gray_img, gray_template, cv2.TM_CCOEFF_NORMED, mask=mask)
-            _, max_val, _, max_loc = cv2.minMaxLoc(result)
-            print(f"[DEBUG] Masked template matching confidence: {max_val:.3f}")
+        # Try all templates on the same image
+        best_match = None
+        best_confidence = 0
+        
+        processing_start_time = time.time()
+        
+        for template_name, template, mask in templates:
+            gray_template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
             
-            # If masked confidence is below threshold, try unmasked approach
-            if max_val < threshold:
-                print(f"[DEBUG] Masked confidence {max_val:.3f} < threshold {threshold}, trying unmasked...")
+            # Try masked template matching first (if mask available)
+            if mask is not None:
+                result = cv2.matchTemplate(gray_img, gray_template, cv2.TM_CCOEFF_NORMED, mask=mask)
+                _, max_val, _, max_loc = cv2.minMaxLoc(result)
+                print(f"[DEBUG] {template_name} masked confidence: {max_val:.3f}")
+                
+                # If masked confidence is below threshold, try unmasked
+                if max_val < threshold:
+                    result = cv2.matchTemplate(gray_img, gray_template, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+                    print(f"[DEBUG] {template_name} unmasked confidence: {max_val:.3f}")
+            else:
                 result = cv2.matchTemplate(gray_img, gray_template, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(result)
-                print(f"[DEBUG] Unmasked template matching confidence: {max_val:.3f}")
-        else:
-            # No mask available, use unmasked approach directly
-            result = cv2.matchTemplate(gray_img, gray_template, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(result)
-            print(f"[DEBUG] Unmasked template matching confidence: {max_val:.3f}")
+                print(f"[DEBUG] {template_name} confidence: {max_val:.3f}")
+            
+            # Keep track of best match
+            if max_val >= threshold and max_val > best_confidence:
+                best_confidence = max_val
+                best_match = (template_name, template, max_loc, max_val)
         
-        # Time processing completion
         processing_end_time = time.time()
-        total_processing_time = (processing_end_time - processing_start_time) * 1000  # Convert to milliseconds
-        total_time_from_acquisition = (processing_end_time - img_start_time) * 1000  # Total time from image capture
+        total_processing_time = (processing_end_time - processing_start_time) * 1000
+        total_time_from_acquisition = (processing_end_time - img_start_time) * 1000
         
         print(f"[TIMING] Template matching took: {total_processing_time:.2f}ms")
         print(f"[TIMING] Total time (acquisition + processing): {total_time_from_acquisition:.2f}ms")
         
-        print(f"[DEBUG] {action_desc} - Attempt {attempt_count}: Max confidence = {max_val:.3f}, Threshold = {threshold}")
+        print(f"[DEBUG] {action_desc} - Attempt {attempt_count}: Best confidence = {best_confidence:.3f}, Threshold = {threshold}")
 
-        if max_val >= threshold:
+        if best_match:
+            found = True
+            template_name, template, max_loc, max_val = best_match
             h, w = template.shape[:2]
             top_left = max_loc
             center_x = top_left[0] + w // 2
@@ -302,7 +327,7 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
             # Remove .png extension for tap_info key
             key_name = template_name.replace('.png', '')
 
-            # To save/update a location:
+            # Save location and color info
             patch = img[
                 center_y - patch_size : center_y + patch_size + 1,
                 center_x - patch_size : center_x + patch_size + 1
@@ -317,34 +342,24 @@ def locate_and_press(device, template_name, action_desc, threshold=0.8, verify_i
             
             if not verify_instead_of_press:
                 device.input_tap(center_x, center_y)
-                time.sleep(0.3)  # Small delay after tap
-                device.input_tap(center_x, center_y)  # Tap twice to ensure action
-                print(f"{action_desc} - Pressed at ({center_x}, {center_y}) with confidence {max_val:.2f}")
+                time.sleep(0.3)
+                device.input_tap(center_x, center_y)
+                print(f"\033[92m✅ {action_desc} - PRESSED {template_name} at ({center_x}, {center_y}) with confidence {max_val:.2f}\033[0m")
             else:
-                print(f"{action_desc} - Verified at ({center_x}, {center_y}) with confidence {max_val:.2f}")
-            return True
+                print(f"\033[92m✅ {action_desc} - VERIFIED {template_name} at ({center_x}, {center_y}) with confidence {max_val:.2f}\033[0m")
+        
         do_button_flags(device)
-        time.sleep(0.5)  # Small delay before next attempt
+        time.sleep(0.5)
     
-    print(f"{action_desc} - Not found after {timeout} seconds. Total attempts: {attempt_count}")
-
-    # Create screenshot and save to "Not found" folder
-    current_img = get_screen_capture(device)
-    if current_img is not None:
-        not_found_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Not found")
-        os.makedirs(not_found_dir, exist_ok=True)
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = f"not_found_{template_name.replace('.png', '')}_{timestamp}.png"
-        filepath = os.path.join(not_found_dir, filename)
-        cv2.imwrite(filepath, current_img)
-        print(f"Screenshot saved to {filepath}")
+    print(f"{action_desc} - {'Found' if found else 'Not found'} after {timeout} seconds. Total attempts: {attempt_count}")
     
-    # Try reconnect and last activity
-    if no_debugger:
+    if not found:
+        if no_debugger:
+            return False
+        elif debugger(device, template_names[0] if template_names else None, type="locate_and_press"):
+            return True
         return False
-    elif debugger(device, last_activity_name, type="locate_and_press"):
-        return True  # Recovery succeeded
-    return False    # Only if debugger could not recover
+    return found
 
 def swipe_up(device, img, duration_ms=500):
     """
@@ -363,18 +378,16 @@ def Initiate_bot_resend_sequence(device):
     print("Initiating bot sequence")
     img = get_screen_capture(device)
     
-    locate_and_press(device, "X.png", "Close any Limited Offers", timeout=20, last_activity_name="X.png") 
-    time.sleep(1)  # Wait a moment for screen to stabilize
-    locate_and_press(device, "X.png", "Close any Limited Offers", timeout=5, last_activity_name="X.png", no_debugger=True) 
-    time.sleep(1)  # Wait a moment for screen to stabilize
-    locate_and_press(device, "X.png", "Close any Limited Offers", timeout=5, last_activity_name="X.png", no_debugger=True) 
-    locate_and_press(device, "Head_toothless_left_up.png", "Locate and press Head toothless left up", timeout=10, last_activity_name="Head_toothless_left_up.png")
-    time.sleep(1)  # Wait a moment for screen to stabilize
+    # locate_and_press(device, "X.png", "Close any Limited Offers", timeout=25, last_activity_name="X.png", no_debugger=True) 
+    # time.sleep(1)  # Wait a moment for screen to stabilize
+    # locate_and_press(device, "X.png", "Close any Limited Offers", timeout=5, last_activity_name="X.png", no_debugger=True) 
+    # time.sleep(1)  # Wait a moment for screen to stabilize
+    locate_and_press(device, "Head_toothless_left_up.png", "Locate and press Head toothless left up", timeout=25, last_activity_name="Head_toothless_left_up.png")
     locate_and_press(device, "Night_Fury.png", "Verify that Night Fury is selected", verify_instead_of_press=True, timeout=10, last_activity_name="Head_toothless_left_up.png")
     locate_and_press(device, "Search_Button.png", "Locate and press Search button", timeout=10, last_activity_name="Search_Button.png")
     max_swipes = 4
     for attempt in range(max_swipes):
-        if locate_and_press(device, "Terrible_Terror_Search.png", "Locate and press Terrible terror in the list", timeout=5, no_debugger=True):
+        if locate_and_press(device, "Terrible_Terror_Search.png", "Locate and press Terrible terror in the list", timeout=4, no_debugger=True):
             break
         swipe_up(device, img)
         attempt += 1
@@ -387,18 +400,21 @@ def Initiate_bot_resend_sequence(device):
 
     with open("tap_info.json", "w") as f:
         json.dump(tap_info, f, indent=2)  
+    time.sleep(2)  # Wait a moment for screen to stabilize
     device.input_tap(screen_center_x, screen_center_y)
-    locate_and_press(device, "Bag.png", "Open Bag", timeout=5, last_activity_name="Bag.png")
-    locate_and_press(device, "Collect.png", "Collect toothless rewards", timeout=5, last_activity_name="Collect.png")
-    if locate_and_press(device, "No_thanks.png", "Close Buy egg popup", no_debugger=True, timeout=2):
+    time.sleep(0.5)  # Wait a moment for screen to stabilize
+    device.input_tap(screen_center_x, screen_center_y)
+    locate_and_press(device, "Bag.png", "Open Bag", timeout=10, last_activity_name="Bag.png")
+    locate_and_press(device, "Collect.png", "Collect toothless rewards", timeout=10, last_activity_name="Collect.png")
+    if locate_and_press(device, "No_thanks.png", "Close Buy egg popup", no_debugger=True, timeout=10):
         return True
-    if locate_and_press(device, "Release.png", "Release egg", no_debugger=True, timeout=2):
-        locate_and_press(device, "Yes.png", "Confirm Release egg", timeout=2, last_activity_name="Yes.png")
-        locate_and_press(device, "Yes_2.png", "Close really popup", timeout=2, last_activity_name="Yes_2.png")
-        locate_and_press(device, "X.png", "Popup", no_debugger=True, timeout=2)
-    if locate_and_press(device, "Head_toothless_left_up.png", "Locate Head toothless left up", verify_instead_of_press=True, timeout=2):
+    if locate_and_press(device, "Release.png", "Release egg", no_debugger=True, timeout=10):
+        locate_and_press(device, "Yes.png", "Confirm Release egg", timeout=10, last_activity_name="Yes.png")
+        locate_and_press(device, "Yes_2.png", "Close really popup", timeout=10, last_activity_name="Yes_2.png")
+        locate_and_press(device, "X.png", "Popup", no_debugger=True, timeout=10)
+    if locate_and_press(device, "Head_toothless_left_up.png", "Locate Head toothless left up", verify_instead_of_press=True, timeout=10):
         device.input_tap(screen_center_x, screen_center_y)
-        while not locate_and_press(device, "Resend.png", "Resend toothless button exists", verify_instead_of_press=True, timeout=0.5, last_activity_name="Head_toothless_left_up.png"):
+        while not locate_and_press(device, "Resend.png", "Resend toothless button exists", verify_instead_of_press=True, timeout=10, last_activity_name="Head_toothless_left_up.png"):
             device.input_tap(screen_center_x, screen_center_y)
             time.sleep(0.3)  # Adjust delay as needed
         return True
