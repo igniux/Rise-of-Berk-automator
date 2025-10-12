@@ -2,11 +2,17 @@ from ppadb.client import Client as AdbClient
 import cv2
 import numpy as np
 import time
-import configuration as c
 import threading
 import os
 import datetime  # Add this import at the top if not present
 import json
+
+try:
+    import cv2
+    print("[INFO] Using system OpenCV")
+except ImportError:
+    print("[INFO] Using OpenCV compatibility layer")
+    from cv2_compat import cv2
 
 # The name of the app, to check if it's running
 TARGET_APP_PKG = "com.ludia.dragons"
