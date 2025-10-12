@@ -226,18 +226,23 @@ def Start_Rise_app(device):
             return False 
         return True
 
-def locate_and_press(device, template_names, action_desc, threshold=0.8, verify_instead_of_press=False, timeout=4.0, last_activity_name=None, no_debugger=False, patch_size=25):
+def locate_and_press(device, template_configs, action_desc, threshold=0.95, timeout=4.0, last_activity_name=None, no_debugger=False, patch_size=25):
     do_button_flags(device)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     icons_dir = os.path.join(script_dir, "icons")
     
-    # Handle both single template and list of templates
-    if isinstance(template_names, str):
-        template_names = [template_names]
+    # Handle different input formats
+    if isinstance(template_configs, str):
+        # Single template name (backward compatibility)
+        template_configs = [(template_configs, False)]  # False = press
+    elif isinstance(template_configs, list) and all(isinstance(item, str) for item in template_configs):
+        # List of template names (backward compatibility)
+        template_configs = [(name, False) for name in template_configs]
+    # If already list of tuples, use as-is
     
     # Load all templates
     templates = []
-    for template_name in template_names:
+    for template_name, verify_only in template_configs:
         template_path = os.path.join(icons_dir, template_name)
         template = cv2.imread(template_path, cv2.IMREAD_UNCHANGED)
         
@@ -253,11 +258,11 @@ def locate_and_press(device, template_names, action_desc, threshold=0.8, verify_
         else:
             mask = None
             
-        templates.append((template_name, template, mask))
-        print(f"[DEBUG] Template {template_name} loaded successfully")
+        templates.append((template_name, template, mask, verify_only))
+        print(f"[DEBUG] Template {template_name} loaded successfully ({'verify only' if verify_only else 'press'})")
 
     if not templates:
-        print(f"No valid templates found from {template_names}")
+        print(f"No valid templates found from {template_configs}")
         return False
 
     start_time = time.time()
@@ -283,7 +288,7 @@ def locate_and_press(device, template_names, action_desc, threshold=0.8, verify_
         
         processing_start_time = time.time()
         
-        for template_name, template, mask in templates:
+        for template_name, template, mask, verify_only in templates:
             gray_template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
             
             # Try masked template matching first (if mask available)
@@ -305,7 +310,7 @@ def locate_and_press(device, template_names, action_desc, threshold=0.8, verify_
             # Keep track of best match
             if max_val >= threshold and max_val > best_confidence:
                 best_confidence = max_val
-                best_match = (template_name, template, max_loc, max_val)
+                best_match = (template_name, template, max_loc, max_val, verify_only)
         
         processing_end_time = time.time()
         total_processing_time = (processing_end_time - processing_start_time) * 1000
@@ -318,7 +323,7 @@ def locate_and_press(device, template_names, action_desc, threshold=0.8, verify_
 
         if best_match:
             found = True
-            template_name, template, max_loc, max_val = best_match
+            template_name, template, max_loc, max_val, verify_only = best_match
             h, w = template.shape[:2]
             top_left = max_loc
             center_x = top_left[0] + w // 2
@@ -335,28 +340,29 @@ def locate_and_press(device, template_names, action_desc, threshold=0.8, verify_
             color_code = patch.mean(axis=(0,1))
             print(f"[DEBUG] Patch color: {color_code}")
             
-            tap_info[key_name] = [center_x, center_y, color_code.tolist()]
-            with open("tap_info.json", "w") as f:
-                json.dump(tap_info, f, indent=2)
-            print(f"[DEBUG] Saved to tap_info: {key_name} -> [{center_x}, {center_y}, color]")
-            
-            if not verify_instead_of_press:
+            if not verify_only:
+                tap_info[key_name] = [center_x, center_y, color_code.tolist()]
+                with open("tap_info.json", "w") as f:
+                    json.dump(tap_info, f, indent=2)
+                print(f"[DEBUG] Saved to tap_info: {key_name} -> [{center_x}, {center_y}, color]")
                 device.input_tap(center_x, center_y)
                 time.sleep(0.3)
                 device.input_tap(center_x, center_y)
                 print(f"\033[92m✅ {action_desc} - PRESSED {template_name} at ({center_x}, {center_y}) with confidence {max_val:.2f}\033[0m")
             else:
                 print(f"\033[92m✅ {action_desc} - VERIFIED {template_name} at ({center_x}, {center_y}) with confidence {max_val:.2f}\033[0m")
+                return template_name
         
         do_button_flags(device)
         time.sleep(0.5)
     
     print(f"{action_desc} - {'Found' if found else 'Not found'} after {timeout} seconds. Total attempts: {attempt_count}")
-    
+    if found:
+        return template_name
     if not found:
         if no_debugger:
             return False
-        elif debugger(device, template_names[0] if template_names else None, type="locate_and_press"):
+        elif debugger(device, template_configs[0][0] if template_configs else None, type="locate_and_press"):
             return True
         return False
     return found
@@ -368,7 +374,7 @@ def swipe_up(device, img, duration_ms=500):
     """
     height, width = img.shape[:2]
     x = width // 2
-    y_start = int(height * 0.6)  # Start near bottom
+    y_start = int(height * 0.55)  # Start near bottom
     y_end = int(height * 0.3)    # End near top
     device.shell(f"input swipe {x} {y_start} {x} {y_end} {duration_ms}")
     print(f"Swiped from ({x}, {y_start}) to ({x}, {y_end})")
@@ -378,49 +384,55 @@ def Initiate_bot_resend_sequence(device):
     print("Initiating bot sequence")
     img = get_screen_capture(device)
     
-    # locate_and_press(device, "X.png", "Close any Limited Offers", timeout=25, last_activity_name="X.png", no_debugger=True) 
-    # time.sleep(1)  # Wait a moment for screen to stabilize
-    # locate_and_press(device, "X.png", "Close any Limited Offers", timeout=5, last_activity_name="X.png", no_debugger=True) 
-    # time.sleep(1)  # Wait a moment for screen to stabilize
-    locate_and_press(device, "Head_toothless_left_up.png", "Locate and press Head toothless left up", timeout=25, last_activity_name="Head_toothless_left_up.png")
-    locate_and_press(device, "Night_Fury.png", "Verify that Night Fury is selected", verify_instead_of_press=True, timeout=10, last_activity_name="Head_toothless_left_up.png")
-    locate_and_press(device, "Search_Button.png", "Locate and press Search button", timeout=10, last_activity_name="Search_Button.png")
-    max_swipes = 4
+    locate_and_press(device, [("X.png", False), ("Head_toothless_left_up.png", False), ("Night_Fury.png", True)], "Close any Limited Offers or verify toothless is up", timeout=30)
+    locate_and_press(device, [("Search_Button.png", False), ("X.png", True)], "Locate and press Search button until X", timeout=10)
+    max_swipes = 5
     for attempt in range(max_swipes):
-        if locate_and_press(device, "Terrible_Terror_Search.png", "Locate and press Terrible terror in the list", timeout=4, no_debugger=True):
+        if locate_and_press(device, [("Terrible_Terror_Search.png", False), ("Terrible_Terror_Verify.png", True)], "Locate and press Terrible terror in the list", timeout=4, no_debugger=True):
             break
         swipe_up(device, img)
         attempt += 1
+        time.sleep(0.3)  # Wait a moment for screen to stabilize
     else:
         print("[ERROR] Terrible Terror not found after swiping. Aborting or handling error.")
         # Optionally call debugger or handle as needed
-    locate_and_press(device, "1_new.png", "select 1 bag search option", timeout=10, last_activity_name="1_new.png")
-    locate_and_press(device, "Start_Explore.png", "Locate and press Start Explore button", timeout=10, last_activity_name="Start_Explore.png")
+    locate_and_press(device, [("1_new.png", False), ("Start_Explore.png", True)], "select 1 bag search option", timeout=10)
+    locate_and_press(device, [("Start_Explore.png", False), ("Head_toothless_left_up.png", True)], "Locate and press Start Explore button", timeout=10, last_activity_name="Start_Explore.png")
     locate_and_press(device, "Speed_up.png", "Speed up the exploration free", timeout=10, last_activity_name="Speed_up.png")
-
-    with open("tap_info.json", "w") as f:
-        json.dump(tap_info, f, indent=2)  
-    time.sleep(2)  # Wait a moment for screen to stabilize
-    device.input_tap(screen_center_x, screen_center_y)
-    time.sleep(0.5)  # Wait a moment for screen to stabilize
-    device.input_tap(screen_center_x, screen_center_y)
-    locate_and_press(device, "Bag.png", "Open Bag", timeout=10, last_activity_name="Bag.png")
+    locate_and_press(device, [("Head_toothless_left_up.png", False), ("Bag.png", True)], "Press on toothless, which is back", timeout=10, last_activity_name="Head_toothless_left_up.png")
+    locate_and_press(device, [("Bag.png", False), ("Collect.png", True)], "Open Bag", timeout=10, last_activity_name="Bag.png")
     locate_and_press(device, "Collect.png", "Collect toothless rewards", timeout=10, last_activity_name="Collect.png")
-    if locate_and_press(device, "No_thanks.png", "Close Buy egg popup", no_debugger=True, timeout=10):
+    
+    # Single call to handle all post-collection scenarios
+    found_template = locate_and_press(device, [
+        ("No_thanks.png", True),           # Verify if found
+        ("Release.png", True),             # Verify if found
+        ("Head_toothless_left_up.png", True) # Verify if found
+    ], "Handle post-collection actions", timeout=10, last_activity_name="Collect.png")
+    
+    # Handle different logic based on what was found
+    if found_template == "No_thanks.png":
+        print("[INFO] Buy egg popup closed, sequence complete")
         return True
-    if locate_and_press(device, "Release.png", "Release egg", no_debugger=True, timeout=10):
-        locate_and_press(device, "Yes.png", "Confirm Release egg", timeout=10, last_activity_name="Yes.png")
-        locate_and_press(device, "Yes_2.png", "Close really popup", timeout=10, last_activity_name="Yes_2.png")
-        locate_and_press(device, "X.png", "Popup", no_debugger=True, timeout=10)
-    if locate_and_press(device, "Head_toothless_left_up.png", "Locate Head toothless left up", verify_instead_of_press=True, timeout=10):
-        device.input_tap(screen_center_x, screen_center_y)
-        while not locate_and_press(device, "Resend.png", "Resend toothless button exists", verify_instead_of_press=True, timeout=10, last_activity_name="Head_toothless_left_up.png"):
-            device.input_tap(screen_center_x, screen_center_y)
-            time.sleep(0.3)  # Adjust delay as needed
+        
+    elif found_template == "Release.png":
+        print("[INFO] Egg detected, starting release sequence")
+        locate_and_press(device, [("Release.png", False), ("Yes.png", True)], "Press Release egg", timeout=10, last_activity_name="Release.png")
+        locate_and_press(device, [("Yes.png", False), ("Yes_2.png", False), ("Head_toothless_left_up.png", True)], "Confirm Release egg", timeout=10, last_activity_name="Yes.png")
+        locate_and_press(device, [("X.png", False), ("Head_toothless_left_up.png", False)], "Close final popup", no_debugger=True, timeout=10)
+
+    elif found_template == "Head_toothless_left_up.png":
+        print("[INFO] Toothless detected, starting resend sequence")
+        locate_and_press(device, [("Head_toothless_left_up.png", False), ("Resend.png", True)], "Press on toothless until resend appears", timeout=10, last_activity_name="Head_toothless_left_up.png")
+        return True
+        
+    else:
+        locate_and_press(device, [("Head_toothless_left_up.png", False), ("Resend.png", True)], "Press on toothless until resend appears", timeout=10, last_activity_name="Head_toothless_left_up.png")
+        print("[INFO] No specific post-collection action needed")
         return True
 
 def check_color_and_tap(
-    device, tap_target, tolerance=4, patch_size=25, timeout=2.0, tap_count=2, last_activity_name=None, verify_instead_of_press=False, no_debugger=False
+    device, tap_target, tolerance=4, patch_size=25, timeout=7.0, tap_count=2, last_activity_name=None, verify_instead_of_press=False, no_debugger=False
 ):
     start_time = time.time()
     while time.time() - start_time < timeout:
@@ -464,7 +476,7 @@ def classify_bag_patch(mean_color, tolerance=10):
             return name
     return "unknown"
 
-def collect_and_classify_bag(device, tolerance=4, patch_size=10, timeout=2.0, tap_count=2):
+def collect_and_classify_bag(device, tolerance=4, patch_size=10, timeout=7.0, tap_count=2):
     global last_collected
     start_time = time.time()
     found = False
@@ -472,9 +484,6 @@ def collect_and_classify_bag(device, tolerance=4, patch_size=10, timeout=2.0, ta
     # 1. Try to match and tap Collect, and use that img for classification
     while time.time() - start_time < timeout:
         img = get_screen_capture(device)
-        if "Collect" not in tap_info:
-            print(f"[ERROR] No saved location for Collect button in tap_info.")
-            break
         center_x, center_y, saved_color = tap_info["Collect"]
         saved_color = np.array(saved_color)
         patch = img[center_y-patch_size:center_y+patch_size+1, center_x-patch_size:center_x+patch_size+1]
@@ -604,6 +613,9 @@ def main():
 
     Initiate_bot_resend_sequence(device)
 
+    print("\033[38;5;208m" + "="*50)
+    print("🚀 STARTING MAIN BOT LOOP 🚀")
+    print("="*50 + "\033[0m")
     while True:
         do_button_flags(device)
         check_color_and_tap(device, "Resend")
